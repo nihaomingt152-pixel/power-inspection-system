@@ -1,0 +1,38 @@
+# ===== 环境与密钥 =====
+.env
+*.env.local
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ===== 训练数据与模型（不发布 GitHub）=====
+BaiduData/
+Insulator Defect Detection.v9-insulator-defect-detection.yolo26/
+my_dataset/
+runs/
+train_yolo26.py
+convert_and_merge.py
+*.pt
+
+# ===== 数据库与日志 =====
+database/*.db
+database/*.sqlite*
+*.log
+app.log
+
+# ===== 运行时文件 =====
+static/uploads/
+static/outputs/
+reports/
+feedback/
+work/
+.claude/
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
