@@ -119,11 +119,13 @@ def init_db():
         _safe_add_column("detection_records", "gps_source", "VARCHAR(16)", "'none'")
         _safe_add_column("t_work_orders", "detection_record_id", "INTEGER", "NULL")
         _safe_add_column("t_work_orders", "review_remark", "TEXT", "NULL")
+        _safe_add_column("t_work_orders", "close_remark", "TEXT", "NULL")
         _safe_add_column("t_video_detections", "frame_images", "TEXT", "'[]'")
     else:
         _safe_add_column("detection_records", "gps_source", "VARCHAR(16)", "'none'")
         _safe_add_column("t_work_orders", "detection_record_id", "INTEGER", "NULL")
         _safe_add_column("t_work_orders", "review_remark", "TEXT", "NULL")
+        _safe_add_column("t_work_orders", "close_remark", "TEXT", "NULL")
         _safe_add_column("t_video_detections", "frame_images", "JSON", "'[]'")
 
     print(f"[数据库] 初始化完成，类型: {DB_TYPE}")

@@ -11,6 +11,11 @@ let currentResultData = null;
 let cameraStream = null, cameraTimer = null;
 let videoPollTimer = null, currentVideoTaskId = null;
 let historyPage = 1;
+
+// Phase 7.2: 历史记录自动刷新（15秒，静默更新）
+let historyRefreshTimer = null;
+let lastHistorySignature = null;   // 最近一次列表数据签名（用于判断是否有新增记录）
+const HISTORY_REFRESH_INTERVAL = 15000;
 let currentDispatchRecordId = null;  // 当前正在派发的检测记录 ID
 let currentGpsRecordId = null;       // 当前正在设置 GPS 的检测记录 ID
 let currentVideoRecord = null;       // 当前查看的视频检测记录
@@ -67,8 +72,46 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 定时任务
     setInterval(() => { try { pollGpuStatus(); } catch (e) {} }, 5000);
 
+    // Phase 7.2: 历史记录自动刷新（后台时停止，切回前台立即刷新一次）
+    startHistoryAutoRefresh();
+    document.addEventListener('visibilitychange', handleHistoryVisibilityChange);
+
     log('main', '全部初始化完成');
 });
+
+// ===== Phase 7.2: 历史记录自动刷新 =====
+
+function startHistoryAutoRefresh() {
+    if (historyRefreshTimer) return;
+    historyRefreshTimer = setInterval(() => {
+        // 冲突处理：任何弹窗打开时暂停刷新（防止干扰用户正在编辑的表单）
+        if (document.querySelector('.modal.show')) return;
+        try { loadHistory(historyPage, true); } catch (e) { errLog('main', '历史自动刷新失败', e); }
+    }, HISTORY_REFRESH_INTERVAL);
+}
+
+function stopHistoryAutoRefresh() {
+    if (historyRefreshTimer) {
+        clearInterval(historyRefreshTimer);
+        historyRefreshTimer = null;
+    }
+}
+
+// 页面切到后台停止刷新，切回前台立即刷新一次并恢复定时器（节省资源）
+function handleHistoryVisibilityChange() {
+    if (document.hidden) {
+        stopHistoryAutoRefresh();
+    } else {
+        startHistoryAutoRefresh();
+        try { loadHistory(historyPage, true); } catch (e) { errLog('main', '恢复刷新失败', e); }
+    }
+}
+
+// 手动刷新按钮：显示旋转动画 + 立即刷新（带 spinner）
+function manualRefreshHistory(btn) {
+    showRefreshSpinner(btn);
+    loadHistory(historyPage);
+}
 
 // ===== 导航栏 =====
 function updateNavUser() {
@@ -1101,7 +1144,7 @@ function addCameraLog(dets) {
 }
 
 // ===== 历史 =====
-async function loadHistory(pg = 1) {
+async function loadHistory(pg = 1, auto = false) {
     historyPage = pg;
     const src = document.getElementById('history-filter')?.value || '';
     const al = document.getElementById('alert-only')?.checked || false;
@@ -1114,6 +1157,12 @@ async function loadHistory(pg = 1) {
         const { records, total, page, total_pages } = d.data;
         const tb = document.getElementById('history-tbody');
         if (!tb) return;
+
+        // 静默刷新优化：数据无变化时跳过渲染，避免页面闪烁/重置滚动位置
+        const sig = records.map(r => r.id + (r.record_type || '')).join(',') + '|' + total;
+        if (auto && sig === lastHistorySignature) return;
+        lastHistorySignature = sig;
+
         if (!records.length) { tb.innerHTML = '<tr><td colspan="10" class="text-center">暂无记录</td></tr>'; return; }
         tb.innerHTML = records.map(r => {
             const recType = r.record_type || 'image';

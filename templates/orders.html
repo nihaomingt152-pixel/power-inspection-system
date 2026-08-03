@@ -34,7 +34,7 @@
             <option value="rejected">已驳回</option>
             <option value="closed">已闭环</option>
         </select>
-        <button class="btn btn-outline-primary" onclick="loadOrders()">🔄 刷新</button>
+        <button class="btn btn-outline-primary" onclick="manualRefreshOrders(this)">🔄 刷新</button>
     </div>
 
     <!-- 工单列表 -->
@@ -149,6 +149,11 @@
         </div>
     </div></div>
 </div>
+
+<!-- Phase 7.2: 工单闭环报告导出悬浮按钮（仅查看的工单为已闭环时显示） -->
+<button id="btn-export-report" class="btn btn-success d-none export-report-fab" onclick="exportOrderReport()">
+    📄 导出报告
+</button>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="/static/js/common.js"></script>

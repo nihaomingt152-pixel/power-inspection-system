@@ -8,6 +8,11 @@ let currentDetailId = null;        // 当前查看的工单 ID
 let currentRejectOrderId = null;   // 当前要驳回的工单 ID
 let currentDeleteOrderId = null;   // 当前要删除的工单 ID
 
+// Phase 7.2: 工单自动刷新（10秒，静默更新）
+let orderRefreshTimer = null;
+let lastOrderSignature = null;     // 最近一次列表数据签名（用于判断是否有变化）
+const ORDER_REFRESH_INTERVAL = 10000;
+
 const REJECT_REASONS = ['现场情况不符', '备件不足', '需要停电作业', '天气原因无法作业', '其他'];
 
 const STATUS_MAP = {
@@ -48,10 +53,89 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 加载列表
     try { await loadOrders(); } catch (e) { errLog('orders', '列表加载失败', e); }
 
+    // Phase 7.2: 启动工单自动刷新（页面可见时）
+    startOrderAutoRefresh();
+    document.addEventListener('visibilitychange', handleOrderVisibilityChange);
+
+    // 用户打开/关闭弹窗时暂停/恢复自动刷新（防止干扰编辑操作）
+    const modalEl = document.getElementById('order-detail-modal');
+    if (modalEl) {
+        modalEl.addEventListener('show.bs.modal', () => stopOrderAutoRefresh());
+        modalEl.addEventListener('hidden.bs.modal', () => {
+            hide('btn-export-report');   // 关闭详情后隐藏右下角导出按钮
+            startOrderAutoRefresh();
+        });
+    }
+
     log('orders', '初始化完成');
 });
 
-async function loadOrders(page = 1) {
+// ===== Phase 7.2: 工单自动刷新 =====
+
+function startOrderAutoRefresh() {
+    if (orderRefreshTimer) return;
+    orderRefreshTimer = setInterval(() => {
+        // 冲突处理：任何弹窗打开时暂停刷新（防止覆盖用户正在编辑的表单）
+        if (document.querySelector('.modal.show')) return;
+        try { loadOrders(orderPage, true); } catch (e) { errLog('orders', '自动刷新失败', e); }
+    }, ORDER_REFRESH_INTERVAL);
+}
+
+function stopOrderAutoRefresh() {
+    if (orderRefreshTimer) {
+        clearInterval(orderRefreshTimer);
+        orderRefreshTimer = null;
+    }
+}
+
+// 页面切到后台停止刷新，切回前台立即刷新一次并恢复定时器（节省资源）
+function handleOrderVisibilityChange() {
+    if (document.hidden) {
+        stopOrderAutoRefresh();
+    } else {
+        startOrderAutoRefresh();
+        try { loadOrders(orderPage, true); } catch (e) { errLog('orders', '恢复刷新失败', e); }
+    }
+}
+
+// 手动刷新按钮：显示旋转动画 + 立即刷新（带 spinner）
+function manualRefreshOrders(btn) {
+    showRefreshSpinner(btn);
+    loadOrders(orderPage);
+}
+
+// ===== Phase 7.2: 导出工单闭环报告 =====
+async function exportOrderReport(orderId) {
+    const id = orderId || currentDetailId;
+    if (!id) return;
+    try {
+        const res = await fetch(`/api/orders/${id}/export-report`);
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.detail || '导出失败');
+            return;
+        }
+        // 从 Content-Disposition 解析文件名（RFC 5987 编码），解析失败用默认名
+        const disposition = res.headers.get('Content-Disposition') || '';
+        const match = disposition.match(/filename\*?=(?:UTF-8''|"|)([^";]+)/i);
+        const filename = match ? decodeURIComponent(match[1]) : `工单报告_#${id}.docx`;
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        notify(`工单 #${id} 报告已导出`, 'success');
+    } catch (e) {
+        errLog('orders', '导出失败', e);
+        alert('导出失败: ' + e.message);
+    }
+}
+
+async function loadOrders(page = 1, auto = false) {
     orderPage = page;
     const status = document.getElementById('order-status-filter')?.value || '';
     let url = `/api/orders?page=${page}&page_size=15`;
@@ -62,6 +146,11 @@ async function loadOrders(page = 1) {
     const { records, total, page: cur, total_pages } = d.data;
     const tbody = document.getElementById('orders-tbody');
     if (!tbody) return;
+
+    // 静默刷新优化：数据无变化时跳过渲染，避免页面闪烁/重置滚动位置
+    const sig = records.map(r => r.id).join(',') + '|' + total;
+    if (auto && sig === lastOrderSignature) return;
+    lastOrderSignature = sig;
 
     if (!records.length) {
         tbody.innerHTML = '<tr><td colspan="8" class="text-center">暂无工单</td></tr>';
@@ -162,6 +251,14 @@ async function showOrderDetail(id) {
         // Admin 可重新派发已驳回工单
         if ((role === 'inspector' || role === 'admin') && r.status === 'rejected') {
             actions += `<button class="btn btn-primary" onclick="showReassignModal(${r.id})">📤 重新派发</button> `;
+        }
+        // Phase 7.2: 已闭环工单 → 详情弹窗内显示导出按钮 + 页面右下角悬浮按钮
+        if (r.status === 'closed') {
+            actions += `<button class="btn btn-success" onclick="exportOrderReport(${r.id})">📄 导出报告</button> `;
+            const fab = document.getElementById('btn-export-report');
+            if (fab) show(fab);
+        } else {
+            hide('btn-export-report');
         }
         const footer = document.getElementById('order-detail-actions');
         if (footer) footer.innerHTML = actions || '<small class="text-muted">当前状态无可用操作</small>';
@@ -305,8 +402,13 @@ async function confirmReassign() {
 
 async function approveOrder(id) {
     if (!confirm('确认此工单已修复完成，闭环处理？')) return;
+    // 闭环备注（可选，会写入导出报告）
+    const closeRemark = prompt('请输入闭环备注（可选）：', '');
+    if (closeRemark === null) return;   // 用户取消
+    const fd = new FormData();
+    if (closeRemark.trim()) fd.append('close_remark', closeRemark.trim());
     try {
-        const d = await apiPost(`/api/orders/${id}/approve`, new FormData());
+        const d = await apiPost(`/api/orders/${id}/approve`, fd);
         if (d.success) {
             if (detailModal) detailModal.hide();
             await loadOrders();

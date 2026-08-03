@@ -168,8 +168,8 @@ def submit_review(
     return order
 
 
-def approve_order(db: Session, order_id: int, user_id: int) -> WorkOrder:
-    """运维人员确认闭环。"""
+def approve_order(db: Session, order_id: int, user_id: int, close_remark: str = "") -> WorkOrder:
+    """运维人员确认闭环（可填写闭环备注，缺省回退到 Worker 复检说明）。"""
     order = db.query(WorkOrder).filter(WorkOrder.id == order_id).first()
     if not order:
         raise ValueError(f"工单不存在: {order_id}")
@@ -182,9 +182,11 @@ def approve_order(db: Session, order_id: int, user_id: int) -> WorkOrder:
         raise ValueError(f"工单状态不允许闭环: {order.status}")
 
     order.status = "closed"
+    order.close_remark = close_remark.strip() if close_remark else (order.review_remark or "")
     order.updated_at = datetime.now()
     op_name = reviewer.full_name if reviewer else f"用户#{user_id}"
-    _add_order_log(db, order_id, user_id, op_name, "approved", "确认闭环，审核通过")
+    _add_order_log(db, order_id, user_id, op_name, "approved",
+                   f"确认闭环，审核通过{': ' + order.close_remark if order.close_remark else ''}")
     db.commit()
     db.refresh(order)
     logger.info(f"工单 #{order_id} 已闭环 by user {user_id}")

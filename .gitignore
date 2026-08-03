@@ -32,6 +32,9 @@ feedback/
 work/
 .claude/
 
+# ===== Dashi PPT 构建产物（本地生成，不发布 GitHub）=====
+output/
+
 # ===== IDE =====
 .idea/
 .vscode/

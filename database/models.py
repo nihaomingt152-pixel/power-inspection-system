@@ -188,6 +188,7 @@ class WorkOrder(Base):
     )
     reject_reason = Column(Text, nullable=True, comment="驳回理由")
     review_remark = Column(Text, nullable=True, comment="Worker提交复检时的处理说明")
+    close_remark = Column(Text, nullable=True, comment="闭环备注（运维确认闭环时填写）")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -214,6 +215,7 @@ class WorkOrder(Base):
             "status": self.status,
             "reject_reason": self.reject_reason,
             "review_remark": self.review_remark,
+            "close_remark": self.close_remark,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

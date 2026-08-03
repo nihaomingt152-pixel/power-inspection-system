@@ -158,7 +158,7 @@
                 <option value="">全部</option><option value="image">图片</option><option value="video">视频</option>
             </select>
             <label class="form-check"><input type="checkbox" id="alert-only" class="form-check-input" onchange="loadHistory()"> 仅预警</label>
-            <button class="btn btn-sm btn-outline-secondary" onclick="loadHistory()">🔄 刷新</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="manualRefreshHistory(this)">🔄 刷新</button>
         </div>
         <div class="table-responsive"><table class="table table-hover table-sm">
             <thead><tr><th>ID</th><th>来源</th><th>文件名</th><th>目标</th><th>缺陷</th><th>预警</th><th>异常</th><th>耗时</th><th>时间</th><th>操作</th></tr></thead>

@@ -178,6 +178,22 @@ document.addEventListener('DOMContentLoaded', function() {
     ModalManager._cleanBackdrops();
 });
 
+// ===== 手动刷新按钮动画（Phase 7.2）=====
+// 手动刷新时显示旋转图标 + "刷新中..."，2 秒后自动恢复原样
+function showRefreshSpinner(btn) {
+    if (!btn) return;
+    const original = btn.innerHTML;
+    const spinner = '<span class="refresh-spinner">🔄</span>';
+    btn.disabled = true;
+    btn.classList.add('btn-refreshing');
+    btn.innerHTML = `${spinner} 刷新中...`;
+    setTimeout(() => {
+        btn.disabled = false;
+        btn.classList.remove('btn-refreshing');
+        btn.innerHTML = original;
+    }, 2000);
+}
+
 // ===== 通知 =====
 function notify(msg, type) {
     type = type || 'info';

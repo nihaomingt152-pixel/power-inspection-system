@@ -641,10 +641,15 @@ def api_submit_review(
 
 
 @app.post("/api/orders/{order_id}/approve")
-def api_approve_order(order_id: int, request: Request, db=Depends(get_db)):
+def api_approve_order(
+    order_id: int, request: Request,
+    close_remark: str = Form(""),
+    db=Depends(get_db),
+):
+    """确认闭环（可附带闭环备注，用于导出报告）。"""
     user = require_login(request, db)
     try:
-        order = approve_order(db, order_id, user.id)
+        order = approve_order(db, order_id, user.id, close_remark=close_remark)
         return JSONResponse({"success": True, "data": order.to_dict()})
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -726,6 +731,34 @@ def api_order_logs(order_id: int, request: Request, db=Depends(get_db)):
     require_login(request, db)
     logs = get_order_logs(db, order_id)
     return JSONResponse({"success": True, "data": logs})
+
+
+@app.get("/api/orders/{order_id}/export-report")
+def api_export_order_report(order_id: int, request: Request, db=Depends(get_db)):
+    """
+    导出工单闭环报告（Word 文档，Phase 7.2）。
+    仅 closed（已闭环）状态的工单允许导出。
+    """
+    require_login(request, db)
+    try:
+        order = get_order_detail(db, order_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+    if order.status != "closed":
+        raise HTTPException(400, "仅已闭环状态的工单可导出报告")
+
+    try:
+        from services.report_service import export_work_order_report
+        path = export_work_order_report(order, db, REPORTS_DIR)
+        return FileResponse(
+            path=path,
+            filename=Path(path).name,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+    except Exception as e:
+        logger.error(f"工单 #{order_id} 报告导出失败: {e}")
+        raise HTTPException(500, f"报告生成失败: {e}")
 
 
 @app.get("/api/repairmen")
