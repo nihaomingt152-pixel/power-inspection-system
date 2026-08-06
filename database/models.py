@@ -189,6 +189,7 @@ class WorkOrder(Base):
     reject_reason = Column(Text, nullable=True, comment="驳回理由")
     review_remark = Column(Text, nullable=True, comment="Worker提交复检时的处理说明")
     close_remark = Column(Text, nullable=True, comment="闭环备注（运维确认闭环时填写）")
+    ai_summary = Column(JSON, nullable=True, comment="AI 分析摘要（派发时记录，工单详情展示）")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -216,6 +217,7 @@ class WorkOrder(Base):
             "reject_reason": self.reject_reason,
             "review_remark": self.review_remark,
             "close_remark": self.close_remark,
+            "ai_summary": self.ai_summary,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -276,6 +278,8 @@ class VideoDetectionRecord(Base):
     created_at = Column(DateTime, default=datetime.now, comment="创建时间")
     created_by = Column(Integer, ForeignKey("t_users.id"), nullable=True, comment="创建人ID")
     status = Column(String(20), nullable=False, default="completed", comment="状态: completed/failed")
+    file_md5 = Column(String(32), nullable=True, index=True, comment="视频文件 MD5（重复上传缓存，优化7）")
+    video_summary = Column(JSON, nullable=True, comment="整段视频AI分析总结（每视频仅调用一次API生成）")
 
     def to_dict(self):
         return {
@@ -299,4 +303,5 @@ class VideoDetectionRecord(Base):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "created_by": self.created_by,
             "status": self.status,
+            "video_summary": self.video_summary,
         }

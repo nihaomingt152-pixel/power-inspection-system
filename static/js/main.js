@@ -17,6 +17,8 @@ let historyRefreshTimer = null;
 let lastHistorySignature = null;   // 最近一次列表数据签名（用于判断是否有新增记录）
 const HISTORY_REFRESH_INTERVAL = 15000;
 let currentDispatchRecordId = null;  // 当前正在派发的检测记录 ID
+let currentDispatchImagePath = null; // 当前派发工单的缺陷图路径（视频帧派发时传递给后端）
+let currentDispatchAiSummary = null; // 当前派发工单的 AI 摘要（图片=ai_analysis，视频=video_summary）
 let currentGpsRecordId = null;       // 当前正在设置 GPS 的检测记录 ID
 let currentVideoRecord = null;       // 当前查看的视频检测记录
 let currentFrameIndex = 0;           // 当前查看的帧索引
@@ -278,6 +280,36 @@ function drawGlowBoxes(canvasId, originalSrc, detections) {
 }
 
 // ===== 图片上传 =====
+// ===== 移动端图片压缩（策略1：减轻公网传输负担）=====
+// 仅移动端启用：canvas 绘制缩放（长边 1024px）+ JPEG 质量 0.7。
+// 压缩失败或非图片时回退原文件，保证功能不中断。
+async function compressImage(file) {
+    if (!isMobile() || !file.type.startsWith('image/')) return file;
+    return new Promise((resolve) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+            URL.revokeObjectURL(url);
+            const MAX = 1024;
+            let { width, height } = img;
+            if (width <= MAX && height <= MAX) { resolve(file); return; }
+            const scale = Math.min(1, MAX / Math.max(width, height));
+            width = Math.round(width * scale);
+            height = Math.round(height * scale);
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+            canvas.toBlob((blob) => {
+                if (!blob) { resolve(file); return; }
+                resolve(new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' }));
+            }, 'image/jpeg', 0.7);
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+        img.src = url;
+    });
+}
+
 async function uploadImages() {
     log('main', 'uploadImages 被调用');
     const inp = document.getElementById('file-images');
@@ -292,9 +324,15 @@ async function uploadImages() {
     const grid = document.getElementById('batch-grid');
     if (grid) grid.innerHTML = '';
 
+    // 移动端：压缩图片（公网链路传输大图极慢）+ 请求精简返回
+    const prepared = [];
+    for (const f of files) prepared.push(await compressImage(f));
+    const isMob = isMobile();
+
     if (files.length === 1) {
-        const fd = new FormData(); fd.append('file', files[0]);
+        const fd = new FormData(); fd.append('file', prepared[0]);
         fd.append('call_ai', callAi); fd.append('call_fallback', callFallback);
+        if (isMob) fd.append('mobile', 'true');
         try {
             const d = await apiPost('/api/upload/image', fd);
             if (progress) progress.classList.add('d-none');
@@ -317,17 +355,19 @@ async function uploadImages() {
         }
     } else {
         let done = 0;
-        for (const f of files) {
+        for (let i = 0; i < prepared.length; i++) {
+            const f = prepared[i];
             const fd = new FormData(); fd.append('file', f);
             fd.append('call_ai', callAi); fd.append('call_fallback', callFallback);
+            if (isMob) fd.append('mobile', 'true');
             try {
                 const d = await apiPost('/api/upload/image', fd);
                 if (d.success) {
-                    addBatchCard(d.data, f.name);
+                    addBatchCard(d.data, files[i].name);
                     if (d.data.speech_alert) speakIfNeeded(d.data);
                 }
                 done++;
-            } catch (e) { errLog('main', `批量上传失败: ${f.name}`, e); }
+            } catch (e) { errLog('main', `批量上传失败: ${files[i].name}`, e); }
         }
         if (progress) progress.classList.add('d-none');
         log('main', `批量检测完成: ${done}/${files.length}`);
@@ -340,8 +380,7 @@ function addBatchCard(data, fname) {
     if (!grid) return;
     const ai = data.ai_analysis || {};
     const sev = ai.severity || '未知';
-    const imgSrc = data.annotated_image_path
-        ? '/api/preview/' + data.annotated_image_path.replace(/\\/g, '/').split('/static/uploads/').pop() : '';
+    const imgSrc = buildPreviewUrl(data.annotated_image_path);
     const card = document.createElement('div');
     card.className = 'batch-card';
     card.onclick = () => { currentResultData = data; showDetail(data, fname); document.getElementById('detail-card')?.classList.remove('d-none'); };
@@ -355,21 +394,50 @@ function addBatchCard(data, fname) {
 function showDetail(data, fname) {
     const ai = data.ai_analysis || {};
     const sev = ai.severity || '未知';
-    const imgSrc = data.annotated_image_path
-        ? '/api/preview/' + data.annotated_image_path.replace(/\\/g, '/').split('/static/uploads/').pop() : '';
+    const fb = data.fallback_result || null;
+    // 判断各引擎是否有实际结果（AI 关闭时 ai_analysis 为空，兜底关闭时 fallback_result 为 null）
+    const hasAi = !!(data.ai_analysis && Object.keys(data.ai_analysis).length > 0);
+    const hasFb = !!(fb && (fb.description || fb.is_abnormal));
+    const imgSrc = buildPreviewUrl(data.annotated_image_path);
     const dc = document.getElementById('detail-content');
     if (!dc) return;
+
+    // AI 分析报告区块（仅当 call_ai 开启且有结果时展示）
+    let aiHtml = '';
+    if (hasAi) {
+        aiHtml = `<div class="result-block ai-report">
+            <h6>🧠 AI 分析报告</h6>
+            <p><strong>描述:</strong> ${ai.description || '无'}</p>
+            <p><strong>严重程度:</strong> <span class="severity-tag severity-${ai.severity || '一般'}">${ai.severity || '一般'}</span></p>
+            <p><strong>成因:</strong> ${ai.cause || '无'}</p>
+            <p><strong>建议:</strong> ${ai.suggestion || '无'}</p>
+        </div>`;
+    }
+
+    // 兜底异物检测区块（独立于 AI 分析，仅当 call_fallback 开启且有结果时展示）
+    let fbHtml = '';
+    if (hasFb) {
+        const confMap = { high: '高', medium: '中', low: '低' };
+        const confText = confMap[fb.confidence] || fb.confidence || '未知';
+        fbHtml = `<div class="result-block fallback-report">
+            <h6>🔍 兜底异物检测</h6>
+            <p><strong>描述:</strong> ${fb.description || '无'}</p>
+            <p><strong>是否异常:</strong> ${fb.is_abnormal ? '<span class="text-danger fw-bold">是</span>' : '否'}</p>
+            <p><strong>置信度:</strong> ${confText}</p>
+        </div>`;
+    }
+
     dc.innerHTML = `
         <div class="col-md-6"><canvas id="glow-canvas" style="width:100%;max-height:450px;background:#1a1a2e;"></canvas></div>
         <div class="col-md-6">
             <h5>${fname}</h5>
-            <span class="severity-tag severity-${sev} mb-2">${sev}</span>
-            ${data.has_abnormal ? '<span class="badge bg-warning ms-1">⚠ 异物: ' + (data.abnormal_desc || '') + '</span>' : ''}
-            <p class="mt-2"><strong>描述:</strong> ${ai.description || '无'}</p>
-            <p><strong>成因:</strong> ${ai.cause || '无'}</p>
-            <p><strong>建议:</strong> ${ai.suggestion || '无'}</p>
+            ${hasAi ? `<span class="severity-tag severity-${sev} mb-2">${sev}</span>` : ''}
+            ${data.has_abnormal ? '<span class="badge bg-warning ms-1">⚠ 潜在异物</span>' : ''}
+            ${aiHtml}
+            ${fbHtml}
+            <h6 class="mt-2">🤖 YOLO 检测:</h6>
+            ${data.detections?.length ? '<ul>' + data.detections.map(d => `<li>${d.class_name} (${(d.confidence * 100).toFixed(1)}%)</li>`).join('') + '</ul>' : '<p class="text-muted">未检测到目标</p>'}
             <small class="text-muted">YOLO:${data.timing?.yolo_ms}ms + AI:${data.timing?.ai_ms || '-'}ms = ${data.timing?.total_ms}ms</small>
-            ${data.detections?.length ? '<h6 class="mt-2">检测:</h6><ul>' + data.detections.map(d => `<li>${d.class_name} (${(d.confidence * 100).toFixed(1)}%)</li>`).join('') + '</ul>' : ''}
         </div>`;
     if (data.annotated_image_path) drawGlowBoxes('glow-canvas', imgSrc, data.detections);
     const ob = document.getElementById('btn-create-order');
@@ -441,16 +509,17 @@ async function dispatchOrder(recordId) {
         const rec = d.data;
         const ai = rec.ai_analysis || {};
 
-        // 填充图片
+        // 填充图片（修复2.2：加载失败时降级占位，避免裂图）
+        currentDispatchImagePath = rec.annotated_image_path || null;
         const imgEl = document.getElementById('dispatch-img');
         if (imgEl) {
-            const imgPath = rec.annotated_image_path
-                ? '/api/preview/' + rec.annotated_image_path.replace(/\\/g, '/').split('/static/uploads/').pop()
-                : '';
+            const imgPath = buildPreviewUrl(rec.annotated_image_path);
             imgEl.src = imgPath || '';
+            imgEl.onerror = () => { imgEl.removeAttribute('src'); imgEl.alt = '⚠ 图片加载失败'; };
         }
 
-        // 填充 AI 摘要
+        // 填充 AI 摘要（图片检测记录的 AI 分析结果）
+        currentDispatchAiSummary = rec.ai_analysis || null;
         const summaryEl = document.getElementById('dispatch-ai-summary');
         if (summaryEl) {
             const dets = rec.yolo_detections || [];
@@ -490,6 +559,8 @@ async function dispatchOrder(recordId) {
 
         // 显示模态框
         ModalManager.open('dispatch-modal');
+        // 初始化 GPS 小地图（Phase 28）
+        initDispatchMap();
 
     } catch (e) { errLog('main', '派发失败', e); alert('加载派发信息失败: ' + e.message); }
 }
@@ -510,6 +581,8 @@ async function submitDispatch() {
     fd.append('severity', sev);
     fd.append('assigned_to', aid);
     if (currentDispatchRecordId) fd.append('detection_record_id', currentDispatchRecordId);
+    if (currentDispatchImagePath) fd.append('annotated_image_path', currentDispatchImagePath);
+    if (currentDispatchAiSummary) fd.append('ai_summary', JSON.stringify(currentDispatchAiSummary));
     if (gpsLat !== null) fd.append('gps_lat', gpsLat);
     if (gpsLng !== null) fd.append('gps_lng', gpsLng);
 
@@ -520,6 +593,8 @@ async function submitDispatch() {
             notify(`工单 #${d.data.id} 已派发！`, 'success');
             log('main', `工单派发成功: #${d.data.id}`);
             currentDispatchRecordId = null;
+            currentDispatchImagePath = null;
+            currentDispatchAiSummary = null;
             loadHistory();  // 刷新列表
         } else {
             alert(d.detail || '派发失败');
@@ -684,6 +759,9 @@ async function openVideoDetail(recordId) {
         // 跳转视频
         const btnJump = document.getElementById('btn-jump-video');
         if (btnJump) btnJump.onclick = () => window.open(`/video/play/${d.data.task_id}?time=0`, '_blank');
+
+        // 渲染整段视频 AI 总结（Phase 27：取代逐帧时间轴）
+        renderVideoSummary(d.data.video_summary);
 
         // 渲染帧网格
         renderFrameGrid();
@@ -851,7 +929,7 @@ async function openFrameDetail(recordId, frameIndex) {
                 <p><strong>成因:</strong> ${ai.cause || '无'}</p>
                 <p><strong>建议:</strong> ${ai.suggestion || '无'}</p>`;
         } else if (aiEl) {
-            aiEl.innerHTML = '<p class="text-muted">无 AI 分析（此帧非缺陷帧）</p>';
+            aiEl.innerHTML = '<p class="text-muted">ℹ️ 本系统已改为整段视频 AI 总结模式，请在视频详情弹窗中查看整段视频的分析总结。</p>';
         }
 
         // GPS
@@ -863,10 +941,13 @@ async function openFrameDetail(recordId, frameIndex) {
             gpsEl.innerHTML = `GPS: ${lat ? lat + ', ' + lng : '无'} ${src === 'exif' ? '📍 EXIF' : src === 'manual' ? '✏️ 手动' : ''}`;
         }
 
-        // 生成工单按钮（仅缺陷帧 + Admin）
+        // Phase 29: 等级显示 + 生成工单按钮（等级非"正常"即可生成，含手动修改）
+        const effectiveSev = frame.severity_override || frame.original_severity || '正常';
+        updateSeverityDisplay(effectiveSev, frame.severity_override ? '手动修改' : 'YOLO判定');
+        showSeverityModInfo(frame);
         const btnOrder = document.getElementById('btn-frame-create-order');
         if (btnOrder) {
-            if (frame.has_defect && currentUser && currentUser.role === 'inspector') {
+            if (effectiveSev !== '正常' && currentUser && currentUser.role === 'inspector') {
                 btnOrder.classList.remove('d-none');
             } else {
                 btnOrder.classList.add('d-none');
@@ -892,38 +973,223 @@ async function openFrameDetail(recordId, frameIndex) {
     } catch (e) { errLog('main', '加载帧详情失败', e); }
 }
 
+// ===== Phase 29: 单帧预警等级手动修改 =====
+
+const SEVERITY_BADGE_CLASS = { '正常': 'bg-secondary', '一般': 'bg-info', '严重': 'bg-warning', '紧急': 'bg-danger' };
+
+/** 获取帧的有效等级：优先手动修改，否则原始等级，最后按 YOLO 推断 */
+function getEffectiveSeverityOfFrame(frame) {
+    if (frame?.severity_override) return frame.severity_override;
+    if (frame?.original_severity) return frame.original_severity;
+    return frame?.has_defect ? '严重' : '正常';
+}
+
+/** 更新当前等级徽章与来源标记（🤖 YOLO判定 / ✏️ 手动修改） */
+function updateSeverityDisplay(severity, source) {
+    const badge = document.getElementById('current-severity-badge');
+    if (badge) {
+        badge.className = 'badge ' + (SEVERITY_BADGE_CLASS[severity] || 'bg-secondary');
+        badge.textContent = severity;
+    }
+    const tag = document.getElementById('severity-source-tag');
+    if (tag) tag.textContent = source === '手动修改' ? '(✏️ 手动修改)' : '(🤖 YOLO判定)';
+}
+
+/** 显示手动修改记录（修改人 + 时间），未修改则隐藏 */
+function showSeverityModInfo(frame) {
+    const el = document.getElementById('severity-mod-info');
+    if (!el) return;
+    if (frame?.severity_modified_by_name) {
+        el.style.display = 'block';
+        const t = frame.severity_modified_at ? new Date(frame.severity_modified_at).toLocaleString() : '';
+        el.innerHTML = `✏️ <strong>${frame.severity_modified_by_name}</strong> 于 ${t} 手动修改`;
+    } else {
+        el.style.display = 'none';
+        el.innerHTML = '';
+    }
+}
+
+/** 切换等级编辑区域显隐 */
+function toggleSeverityEdit() {
+    const area = document.getElementById('severity-edit-area');
+    if (!area) return;
+    const shown = area.style.display !== 'none';
+    area.style.display = shown ? 'none' : 'flex';
+    if (!shown) {
+        // 预选当前有效等级，便于微调
+        const sel = document.getElementById('severity-select');
+        const badge = document.getElementById('current-severity-badge');
+        if (sel && badge) sel.value = badge.textContent || '正常';
+    }
+}
+
+function cancelSeverityEdit() {
+    const area = document.getElementById('severity-edit-area');
+    if (area) area.style.display = 'none';
+}
+
+/** 确认修改等级：调用后端接口并刷新界面 */
+async function confirmSeverityModification() {
+    if (!currentVideoRecord || currentFrameIndex === undefined) return;
+    const newSeverity = document.getElementById('severity-select')?.value || '正常';
+    try {
+        const d = await apiPutJson(`/api/video/records/${currentVideoRecord.id}/frame/${currentFrameIndex}/severity`, { severity: newSeverity });
+        if (d.success) {
+            const data = d.data;
+            updateSeverityDisplay(data.effective_severity, '手动修改');
+            showSeverityModInfo(data);
+            cancelSeverityEdit();
+            updateFrameSeverityInMemory(data);
+            // 等级非"正常"则生成工单按钮可用
+            const btnOrder = document.getElementById('btn-frame-create-order');
+            if (btnOrder) {
+                if (data.effective_severity !== '正常' && currentUser?.role === 'inspector') btnOrder.classList.remove('d-none');
+                else btnOrder.classList.add('d-none');
+            }
+            notify(`✅ 预警等级已修改为: ${data.effective_severity}`, 'success');
+            log('main', `帧 #${currentFrameIndex} 等级已改为 ${data.effective_severity}`);
+        } else {
+            alert(d.detail || '修改失败');
+        }
+    } catch (e) { errLog('main', '修改等级失败', e); alert('错误: ' + e.message); }
+}
+
+/** 同步更新内存中 currentVideoRecord 的帧数据，保证后续生成工单使用最新等级 */
+function updateFrameSeverityInMemory(data) {
+    if (!currentVideoRecord?.frames_data) return;
+    const fd = currentVideoRecord.frames_data.find(f => f.frame_index === data.frame_index);
+    if (fd) {
+        fd.severity_override = data.severity_override;
+        fd.original_severity = data.original_severity;
+        fd.severity_modified_at = data.severity_modified_at;
+        fd.severity_modified_by = data.severity_modified_by;
+        fd.severity_modified_by_name = data.severity_modified_by_name;
+    }
+}
+
 function createOrderFromFrame() {
     if (!currentVideoRecord || currentFrameIndex === undefined) return;
-    // 打开派发模态框（使用视频 GPS 信息作为默认值）
-    // 这里简化处理：跳转到派发模态框并预填信息
     const frame = (currentVideoRecord.frames_data || []).find(f => f.frame_index === currentFrameIndex);
-    const ai = frame?.ai_analysis || {};
+    // Phase 29: 使用有效等级（手动修改优先），支持对任意帧生成工单
+    const severity = getEffectiveSeverityOfFrame(frame);
 
     // 设置派发表单
     const titleEl = document.getElementById('dispatch-title');
-    if (titleEl) titleEl.value = `视频${currentVideoRecord.original_filename || ''} 帧#${currentFrameIndex} - ${ai.severity || '一般'}`;
+    if (titleEl) titleEl.value = `视频${currentVideoRecord.original_filename || ''} 帧#${currentFrameIndex} - ${severity}`;
 
     const descEl = document.getElementById('dispatch-desc');
-    if (descEl) descEl.value = ai.description || '';
+    if (descEl) descEl.value = (frame?.ai_analysis?.description) || '';
 
     const sevEl = document.getElementById('dispatch-severity');
-    if (sevEl) sevEl.value = ai.severity || '一般';
+    if (sevEl && ['正常', '一般', '严重', '紧急'].includes(severity)) sevEl.value = severity;
 
     const latEl = document.getElementById('dispatch-gps-lat');
     const lngEl = document.getElementById('dispatch-gps-lng');
     if (latEl) latEl.value = currentVideoRecord.gps_lat || '';
     if (lngEl) lngEl.value = currentVideoRecord.gps_lng || '';
 
-    // 关闭帧详情弹窗，打开派发弹窗
-    ModalManager.close('frameDetailModal');
-    currentDispatchRecordId = null;  // 视频帧派发不关联 detection_record
+    // 填充当前帧图片（修复2.2：帧图路径需正确拼接为 /api/preview/...，失败降级）
+    // 记录当前帧图片路径，派发工单时传给后端（否则 Worker 端工单详情无图）
+    const fi = (currentVideoRecord.frame_images || []).find(f => f.frame_index === currentFrameIndex);
+    currentDispatchImagePath = fi?.image_path || null;
+    const imgEl = document.getElementById('dispatch-img');
+    if (imgEl) {
+        if (currentDispatchImagePath) {
+            imgEl.src = buildPreviewUrl(currentDispatchImagePath);
+            imgEl.onerror = () => { imgEl.removeAttribute('src'); imgEl.alt = '⚠ 图片加载失败'; };
+        } else {
+            imgEl.removeAttribute('src');
+        }
+    }
 
-    // 加载检修人列表并显示派发弹窗
+    // 填充 AI 分析摘要（整段视频总结 video_summary，工单创建时一并保存）
+    currentDispatchAiSummary = currentVideoRecord.video_summary || null;
+    const aiSummaryEl = document.getElementById('dispatch-ai-summary');
+    if (aiSummaryEl) {
+        const vs = currentDispatchAiSummary;
+        if (vs?.overall_description) {
+            const riskClass = { '低': 'success', '中': 'warning', '高': 'danger', '紧急': 'danger' }[vs.risk_level || '中'] || 'warning';
+            aiSummaryEl.innerHTML = `
+                <p><strong>风险等级:</strong> <span class="badge bg-${riskClass}">${vs.risk_level || '中'}</span></p>
+                <p><strong>总体描述:</strong> ${vs.overall_description || '无'}</p>
+                ${vs.suggestions ? `<p><strong>建议:</strong> ${vs.suggestions}</p>` : ''}
+                ${vs.focus_points ? `<p><strong>重点关注:</strong> ${vs.focus_points}</p>` : ''}`;
+        } else {
+            aiSummaryEl.innerHTML = '<p class="text-muted">该视频未生成 AI 分析摘要</p>';
+        }
+    }
+
+    // 视频帧派发不关联 detection_record
+    currentDispatchRecordId = null;
+
+    // 加载检修人列表
     apiGet('/api/repairmen').then(d => {
         const sel = document.getElementById('dispatch-assignee');
         if (sel && d.data) sel.innerHTML = d.data.map(u => `<option value="${u.id}">${u.full_name || u.username}</option>`).join('');
     });
-    ModalManager.open('dispatch-modal');
+
+    // 修复2.1：先关闭帧详情弹窗，等待其 backdrop 动画清理完成（约 350ms）
+    // 再打开派发弹窗，避免嵌套 Modal 的 z-index/backdrop 冲突导致派发弹窗被遮挡
+    ModalManager.close('frameDetailModal');
+    setTimeout(() => {
+        ModalManager.open('dispatch-modal');
+        initDispatchMap();
+    }, 350);
+}
+
+// ===== 派发工单 GPS 小地图（Phase 28）=====
+let dispatchMap = null;      // 派发弹窗内的 Leaflet 地图实例
+let dispatchMarker = null;   // 地图上的标记点
+
+function initDispatchMap() {
+    const mapEl = document.getElementById('dispatch-map');
+    if (!mapEl) return;
+    // 销毁旧实例，避免重复初始化
+    if (dispatchMap) { dispatchMap.remove(); dispatchMap = null; }
+    dispatchMarker = null;
+
+    const latEl = document.getElementById('dispatch-gps-lat');
+    const lngEl = document.getElementById('dispatch-gps-lng');
+    const lat = parseFloat(latEl?.value) || 30.0;
+    const lng = parseFloat(lngEl?.value) || 120.0;
+    const hasCoords = !!parseFloat(latEl?.value) && !!parseFloat(lngEl?.value);
+
+    dispatchMap = L.map(mapEl, { attributionControl: false }).setView([lat, lng], hasCoords ? 14 : 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap',
+    }).addTo(dispatchMap);
+
+    const updateInputs = (latv, lngv) => {
+        if (latEl) latEl.value = latv.toFixed(6);
+        if (lngEl) lngEl.value = lngv.toFixed(6);
+    };
+
+    // 已有坐标时放置可拖动标记
+    if (hasCoords) {
+        dispatchMarker = L.marker([lat, lng], { draggable: true }).addTo(dispatchMap);
+        dispatchMarker.on('dragend', () => {
+            const pos = dispatchMarker.getLatLng();
+            updateInputs(pos.lat, pos.lng);
+        });
+    }
+
+    // 点击地图放置/移动标记，并自动填充经纬度输入框
+    dispatchMap.on('click', e => {
+        const { lat: latv, lng: lngv } = e.latlng;
+        updateInputs(latv, lngv);
+        if (dispatchMarker) {
+            dispatchMarker.setLatLng([latv, lngv]);
+        } else {
+            dispatchMarker = L.marker([latv, lngv], { draggable: true }).addTo(dispatchMap);
+            dispatchMarker.on('dragend', () => {
+                const pos = dispatchMarker.getLatLng();
+                updateInputs(pos.lat, pos.lng);
+            });
+        }
+    });
+
+    // 修复地图尺寸（modal 显示后 Leaflet 需 invalidateSize 才正确渲染）
+    setTimeout(() => dispatchMap.invalidateSize(), 200);
 }
 
 // ===== 删除视频记录（Admin）=====
@@ -981,17 +1247,122 @@ async function executeDeleteRecord() {
 }
 
 // ===== 视频 =====
+
+/** 动态加载外部脚本（带超时，用于懒加载 ffmpeg.wasm） */
+function loadScript(src, timeoutMs = 20000) {
+    return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        const t = setTimeout(() => { s.onload = s.onerror = null; reject(new Error('加载超时: ' + src)); }, timeoutMs);
+        s.onload = () => { clearTimeout(t); resolve(); };
+        s.onerror = () => { clearTimeout(t); reject(new Error('加载失败: ' + src)); };
+        s.src = src;
+        document.head.appendChild(s);
+    });
+}
+
+/** 秒数格式化为 "x分y秒"，用于进度剩余时间展示 */
+function formatDuration(sec) {
+    sec = Math.max(0, Math.floor(sec || 0));
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return m > 0 ? `${m}分${s}秒` : `${s}秒`;
+}
+
+/**
+ * 移动端视频压缩（优化1）
+ * 使用 ffmpeg.wasm（CDN 懒加载，约 30MB）将大视频压缩到 720P，上传时间缩短约 70%。
+ * 仅在移动端 + 文件 ≥ 50MB 时触发；压缩失败/超时自动回退原文件，不影响主流程。
+ */
+async function compressVideoForMobile(file) {
+    if (!isMobile() && !/Android|iPhone|iPad/i.test(navigator.userAgent)) return file;
+    if (file.size < 50 * 1024 * 1024) return file;  // 小文件直接上传
+    try {
+        // 懒加载 ffmpeg.wasm（首次下载，之后走浏览器缓存）
+        if (!window.FFmpeg) {
+            await loadScript('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js');
+        }
+        const { createFFmpeg, fetchFile } = FFmpeg;
+        const ffmpeg = createFFmpeg({
+            corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
+            log: false,
+        });
+        await ffmpeg.load();
+        const inName = 'input.mp4', outName = 'output.mp4';
+        ffmpeg.FS('writeFile', inName, await fetchFile(file));
+        await ffmpeg.run('-i', inName,
+            '-vf', 'scale=720:-2',   // 宽度 720，高度自适应保持宽高比
+            '-c:v', 'libx264', '-b:v', '2M', '-preset', 'fast',
+            '-c:a', 'aac', '-b:a', '128k', '-y', outName);
+        const data = ffmpeg.FS('readFile', outName);
+        ffmpeg.FS('unlink', inName);
+        ffmpeg.FS('unlink', outName);
+        const compressed = new File([data.buffer], file.name, { type: 'video/mp4' });
+        // 压缩后反而更大则用原文件
+        return compressed.size < file.size ? compressed : file;
+    } catch (e) {
+        console.warn('视频压缩失败，使用原始文件:', e);
+        return file;
+    }
+}
+
+/**
+ * 缓存命中渲染（优化7）：后端返回历史分析结果，直接展示完成态，无需轮询。
+ */
+function renderVideoResultFromCache(data, file) {
+    notify('✅ 该视频已分析过，直接显示缓存结果', 'success');
+    currentVideoTaskId = data.task_id;
+    show('video-progress-container');
+    const fill = document.getElementById('video-progress-fill');
+    if (fill) fill.style.width = '100%';
+    const txt = document.getElementById('video-progress-text');
+    if (txt) txt.textContent = '100% (缓存命中)';
+    const st = document.getElementById('video-status-text');
+    if (st) st.textContent = 'completed';
+    const nameDisplay = document.getElementById('video-file-name');
+    if (nameDisplay) { nameDisplay.textContent = '✅ 缓存命中，直接显示结果'; nameDisplay.classList.remove('text-warning'); nameDisplay.classList.add('text-success'); }
+    // 原始视频预览（本地文件）
+    const vo = document.getElementById('video-original');
+    if (vo) vo.src = URL.createObjectURL(file);
+    show('video-compare-card');
+    // 标注视频 + 下载按钮
+    if (data.output_video) {
+        const o = document.getElementById('video-output');
+        if (o) o.src = data.output_video.startsWith('/') ? data.output_video : '/' + data.output_video;
+        const btn = document.getElementById('btn-download-video');
+        if (btn) { btn.classList.remove('d-none'); btn.onclick = () => window.open('/api/export/video/' + data.output_video.split('/').pop(), '_blank'); }
+    }
+    renderVideoSummary(data.video_summary);
+    loadHistory();
+    log('main', '视频缓存命中，直接展示结果');
+}
+
 async function uploadVideo() {
     log('main', 'uploadVideo 被调用');
     const inp = document.getElementById('file-video');
     const f = inp?.files?.[0];
     if (!f) { alert('请选择视频文件'); return; }
-    const fd = new FormData(); fd.append('file', f);
+
+    // 移动端大文件压缩（优化1）：压缩失败自动回退原文件
+    let uploadFile = f;
+    if (isMobile() && f.size >= 50 * 1024 * 1024) {
+        const nameEl = document.getElementById('video-file-name');
+        if (nameEl) { nameEl.textContent = '⏳ 视频压缩中（首次需下载约 30MB 压缩组件，请稍候）...'; nameEl.classList.remove('text-success'); nameEl.classList.add('text-warning'); }
+        try {
+            uploadFile = await compressVideoForMobile(f);
+            if (uploadFile !== f) {
+                const mb = (uploadFile.size / 1024 / 1024).toFixed(1);
+                log('main', `视频压缩完成: ${mb}MB`);
+                if (nameEl) { nameEl.textContent = `✅ 已压缩 (${mb}MB)`; nameEl.classList.remove('text-warning'); nameEl.classList.add('text-success'); }
+            }
+        } catch (e) { errLog('main', '视频压缩失败，使用原文件', e); }
+    }
+
+    const fd = new FormData(); fd.append('file', uploadFile);
     fd.append('call_ai', document.getElementById('chk-ai-video')?.checked ?? true);
-    fd.append('fallback_interval', document.getElementById('fallback-interval')?.value ?? 5);
     try {
         const d = await apiPost('/api/upload/video', fd);
         if (d.success) {
+            // 缓存命中（优化7）：直接渲染完成态
+            if (d.data.from_cache) { renderVideoResultFromCache(d.data, f); return; }
             currentVideoTaskId = d.data.task_id;
             show('video-progress-container');
             const vo = document.getElementById('video-original');
@@ -1005,8 +1376,12 @@ async function uploadVideo() {
 
 function startVideoPolling() {
     if (videoPollTimer) clearInterval(videoPollTimer);
+    // 移动端 5s 一次，电脑端保持 1.5s（策略5）
+    const interval = isMobile() ? 5000 : 1500;
     videoPollTimer = setInterval(async () => {
         if (!currentVideoTaskId) { clearInterval(videoPollTimer); return; }
+        // 页面不可见时跳过请求（移动端切后台 / 切 Tab 时不再轮询）
+        if (document.hidden) return;
         try {
             const d = await apiGet(`/api/video/progress/${currentVideoTaskId}`);
             if (!d.success) return;
@@ -1014,7 +1389,13 @@ function startVideoPolling() {
             const fill = document.getElementById('video-progress-fill');
             if (fill) fill.style.width = (t.progress_pct || 0) + '%';
             const txt = document.getElementById('video-progress-text');
-            if (txt) txt.textContent = `${t.progress_pct || 0}% (${t.processed_frames}/${t.total_frames})`;
+            if (txt) {
+                // 优化2：进度百分比 + 帧数 + 预估剩余时间
+                let msg = `${t.progress_pct || 0}% (${t.processed_frames}/${t.total_frames} 帧)`;
+                if (t.estimated_remaining > 0) msg += ` · 预计剩余 ${formatDuration(t.estimated_remaining)}`;
+                if (t.elapsed_seconds > 0) msg += ` · 已用 ${formatDuration(t.elapsed_seconds)}`;
+                txt.textContent = msg;
+            }
             const st = document.getElementById('video-status-text');
             if (st) st.textContent = t.status;
 
@@ -1044,25 +1425,49 @@ function startVideoPolling() {
                     const btn = document.getElementById('btn-download-video');
                     if (btn) { btn.classList.remove('d-none'); btn.onclick = () => window.open('/api/export/video/' + t.output_video_path.split('/').pop(), '_blank'); }
                 }
-                if (t.ai_reports?.length) renderTimeline(t.ai_reports);
+                renderVideoSummary(t.video_summary);
                 loadHistory();
                 log('main', '视频分析完成');
             } else if (t.status === 'failed') { clearInterval(videoPollTimer); }
         } catch (e) { /* 轮询静默 */ }
-    }, 1500);
+    }, interval);
 }
 
-function renderTimeline(reports) {
-    const card = document.getElementById('video-timeline-card');
-    const tl = document.getElementById('ai-timeline');
-    if (!card || !tl) return;
-    card.classList.remove('d-none');
-    tl.innerHTML = reports.map(r => {
-        const m = Math.floor(r.timestamp / 60), s = Math.floor(r.timestamp % 60);
-        return `<div class="timeline-item severity-${r.severity}" onclick="seekVideo(${r.timestamp})">
-            <div class="timeline-time">⏱ ${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')} — <span class="severity-tag severity-${r.severity}">${r.severity}</span></div>
-            <div>${(r.description || '').substring(0, 200)}</div></div>`;
-    }).join('');
+/**
+ * 渲染整段视频 AI 分析总结（Phase 27，取代逐帧 AI 时间轴）。
+ * 同步渲染到两个位置：主检测页的总结卡片 + 视频详情弹窗的总结面板。
+ */
+function renderVideoSummary(summary) {
+    const targets = [
+        { card: 'video-summary-card', content: 'video-summary-content' },
+        { card: 'videoDetailSummaryPanel', content: 'videoDetailSummaryContent' },
+    ];
+    targets.forEach(({ card, content }) => {
+        const cardEl = document.getElementById(card);
+        const el = document.getElementById(content);
+        if (!el) return;
+        if (!summary || !summary.overall_description) {
+            // Phase 28: 未启用 AI 分析时不显示总结区块
+            if (cardEl) cardEl.classList.add('d-none');
+            el.innerHTML = '';
+            return;
+        }
+        const risk = summary.risk_level || '中';
+        const riskClass = { '低': 'success', '中': 'warning', '高': 'danger', '紧急': 'danger' }[risk] || 'warning';
+        const issues = (summary.main_issues || []).map(iss =>
+            `<li><strong>${iss.issue || '未知'}</strong>（${iss.severity || '一般'}）— 帧号: ${(iss.frames || []).join('、') || '未知'}</li>`
+        ).join('');
+        el.innerHTML = `
+            <div class="row g-2 small">
+                <div class="col-12"><span class="badge bg-info me-1">📋</span> <strong>总体描述:</strong> ${summary.overall_description || '无'}</div>
+                ${issues ? `<div class="col-12"><span class="badge bg-warning me-1">⚠️</span> <strong>主要问题:</strong><ul class="mb-0 mt-1">${issues}</ul></div>` : ''}
+                <div class="col-12"><span class="badge bg-${riskClass} me-1">🔴</span> <strong>风险等级:</strong> <span class="badge bg-${riskClass}">${risk}</span></div>
+                ${summary.suggestions ? `<div class="col-12"><span class="badge bg-primary me-1">💡</span> <strong>建议:</strong> ${summary.suggestions}</div>` : ''}
+                ${summary.focus_points ? `<div class="col-12"><span class="badge bg-secondary me-1">📍</span> <strong>重点关注:</strong> ${summary.focus_points}</div>` : ''}
+                ${summary.extra_notes ? `<div class="col-12 text-muted"><span class="badge bg-light text-dark me-1">📝</span> ${summary.extra_notes}</div>` : ''}
+            </div>`;
+        if (cardEl) cardEl.classList.remove('d-none');
+    });
 }
 
 function seekVideo(sec) {
@@ -1148,7 +1553,8 @@ async function loadHistory(pg = 1, auto = false) {
     historyPage = pg;
     const src = document.getElementById('history-filter')?.value || '';
     const al = document.getElementById('alert-only')?.checked || false;
-    let url = `/api/history?page=${pg}&page_size=15`;
+    // 移动端每页 10 条，减少公网传输量（策略3）
+    let url = `/api/history?page=${pg}&page_size=${isMobile() ? 10 : 15}`;
     if (src) url += `&source_type=${src}`;
     if (al) url += `&alert_only=true`;
     try {
@@ -1236,7 +1642,7 @@ async function viewDetail(id) {
         const d = await apiGet(`/api/history/${id}`);
         if (d.success) {
             const rec = d.data, ai = rec.ai_analysis || {};
-            const img = rec.annotated_image_path ? '/api/preview/' + rec.annotated_image_path.replace(/\\/g, '/').split('/static/uploads/').pop() : '';
+            const img = buildPreviewUrl(rec.annotated_image_path);
             const body = document.getElementById('detail-modal-body');
             if (body) {
                 body.innerHTML = `<div class="row"><div class="col-md-6">${img ? `<img src="${img}" class="img-fluid rounded">` : ''}</div>

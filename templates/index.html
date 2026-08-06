@@ -105,16 +105,14 @@
                 </div>
                 <div class="col-md-4 d-flex flex-column gap-2">
                     <label class="form-check"><input type="checkbox" id="chk-ai-video" class="form-check-input" checked> 启用 AI 分析</label>
-                    <div class="input-group input-group-sm">
-                        <span class="input-group-text">兜底间隔(秒)</span>
-                        <input type="number" id="fallback-interval" class="form-control" value="5" min="1" max="30">
-                    </div>
                     <button class="btn btn-primary" onclick="uploadVideo()">🚀 开始分析</button>
                 </div>
             </div>
             <div class="d-none mt-2" id="video-progress-container">
-                <div class="progress"><div class="progress-bar" id="video-progress-fill" style="width:0%"></div></div>
-                <small id="video-progress-text">0%</small>
+                <div class="progress" style="height: 20px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" id="video-progress-fill" style="width:0%"></div>
+                </div>
+                <small id="video-progress-text" class="text-muted">准备分析...</small>
                 <small class="ms-2 text-muted" id="video-status-text"></small>
             </div>
         </div>
@@ -127,8 +125,11 @@
             <button class="btn btn-sm btn-outline-primary mt-1 d-none" id="btn-download-video">⬇ 下载</button></div></div>
         </div>
     </div>
-    <div class="card d-none" id="video-timeline-card">
-        <div class="card-body"><h5>⏱ AI 分析时间轴</h5><div id="ai-timeline"></div></div>
+    <div class="card d-none mt-3" id="video-summary-card">
+        <div class="card-body">
+            <h5>🤖 AI 分析总结（整段视频）</h5>
+            <div id="video-summary-content"></div>
+        </div>
     </div>
 </div>
 
@@ -195,6 +196,11 @@
                 <div class="col-md-6 mb-3"><label class="form-label">GPS 纬度</label><input id="dispatch-gps-lat" class="form-control" placeholder="如 31.2304"></div>
                 <div class="col-md-6 mb-3"><label class="form-label">GPS 经度</label><input id="dispatch-gps-lng" class="form-control" placeholder="如 121.4737"></div>
             </div>
+            <!-- Phase 28: 派发工单 GPS 小地图点选 -->
+            <div class="mt-2">
+                <label class="form-label small text-muted">📍 点击地图选择 GPS 位置（标记可拖动）</label>
+                <div id="dispatch-map" style="width:100%;height:250px;border-radius:8px;border:1px solid #ddd;z-index:1;"></div>
+            </div>
         </div>
         <div class="modal-footer"><button class="btn btn-primary" onclick="submitDispatch()">📤 确认派发</button></div>
     </div></div>
@@ -246,6 +252,12 @@
         </div>
         <div class="modal-body">
             <div id="videoDetailSummary" class="mb-3"></div>
+            <div class="card mb-3 d-none" id="videoDetailSummaryPanel">
+                <div class="card-body">
+                    <h6>🤖 AI 分析总结（整段视频）</h6>
+                    <div id="videoDetailSummaryContent"></div>
+                </div>
+            </div>
             <div class="d-flex gap-2 mb-3">
                 <button class="btn btn-sm btn-outline-primary" id="btn-jump-video">⏱️ 跳转到视频</button>
                 <a id="btn-download-video2" class="btn btn-sm btn-outline-success" href="#" download>📥 下载标注视频</a>
@@ -282,6 +294,32 @@
             <div id="frameDetectionList" class="mb-3"></div>
             <div id="frameAiAnalysis" class="mb-3"></div>
             <div id="frameGpsInfo" class="mb-2"></div>
+            <!-- Phase 29: 单帧预警等级手动修改 -->
+            <div class="row mt-3 align-items-center">
+                <div class="col-md-7">
+                    <span class="fw-bold">当前预警等级：</span>
+                    <span id="current-severity-badge" class="badge bg-secondary">正常</span>
+                    <span class="text-muted ms-1 small" id="severity-source-tag"></span>
+                </div>
+                <div class="col-md-5 text-end">
+                    <button class="btn btn-sm btn-outline-primary" id="toggle-severity-edit-btn" onclick="toggleSeverityEdit()">✏️ 修改等级</button>
+                </div>
+            </div>
+            <div id="severity-edit-area" class="row mt-2" style="display:none;">
+                <div class="col-md-8">
+                    <select class="form-select" id="severity-select">
+                        <option value="正常">正常</option>
+                        <option value="一般">一般</option>
+                        <option value="严重">严重</option>
+                        <option value="紧急">紧急</option>
+                    </select>
+                </div>
+                <div class="col-md-4 d-flex gap-2">
+                    <button class="btn btn-sm btn-success" id="confirm-severity-btn" onclick="confirmSeverityModification()">✅ 确认修改</button>
+                    <button class="btn btn-sm btn-secondary" id="cancel-severity-btn" onclick="cancelSeverityEdit()">取消</button>
+                </div>
+            </div>
+            <div id="severity-mod-info" class="text-muted small mt-1" style="display:none;"></div>
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>

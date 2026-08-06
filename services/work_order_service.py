@@ -10,7 +10,7 @@ from typing import Optional, List
 from datetime import datetime
 
 from sqlalchemy.orm import Session
-from database.models import WorkOrder, User, OrderLog
+from database.models import WorkOrder, User, OrderLog, DetectionRecord
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,7 @@ def create_work_order(
     gps_lat: float = None,
     gps_lng: float = None,
     detection_record_id: int = None,
+    ai_summary: dict = None,
 ) -> WorkOrder:
     """运维人员创建工单。"""
     if severity not in ("一般", "严重", "紧急"):
@@ -90,6 +91,16 @@ def create_work_order(
     if assignee.role != "repairman":
         raise ValueError("只能指派给检修人员(repairman)")
 
+    # 从关联检测记录自动补图片路径与 AI 摘要（图片记录派发时前端只传 detection_record_id）
+    if (not annotated_image_path or not ai_summary) and detection_record_id:
+        det = db.query(DetectionRecord).filter(DetectionRecord.id == detection_record_id).first()
+        if det:
+            if not annotated_image_path:
+                annotated_image_path = det.annotated_image_path or None
+                original_image_path = original_image_path or det.original_image_path or None
+            if not ai_summary and det.ai_analysis:
+                ai_summary = det.ai_analysis
+
     order = WorkOrder(
         title=title,
         description=description,
@@ -99,6 +110,7 @@ def create_work_order(
         gps_lat=gps_lat,
         gps_lng=gps_lng,
         detection_record_id=detection_record_id,
+        ai_summary=ai_summary,
         created_by=created_by,
         assigned_to=assigned_to,
         status="processing",  # 创建即指派 → 直接进入处理中

@@ -314,3 +314,230 @@ class MultimodalService:
             elapsed_ms = (time.time() - start_time) * 1000
             logger.error(f"Qwen3-VL-Flash API 调用失败: {e}")
             raise RuntimeError(f"AI 分析服务调用失败: {str(e)}")
+
+    # ============================================================
+    # 整段视频一次性 AI 总结（Phase 27）
+    # 从"每个缺陷帧调用一次 AI"改为"整段视频调用一次 AI"
+    # ============================================================
+
+    def _resolve_image_path(self, image_path: str) -> str:
+        """将相对路径解析为可读取的绝对路径（frame_images 存的是 static/uploads/... 相对路径）。"""
+        p = Path(image_path)
+        if p.is_absolute():
+            return str(p)
+        return str(Path(__file__).resolve().parent.parent / p)
+
+    def _select_representative_frames(self, frames_data: list, frame_images: list, max_frames: int = 5):
+        """选取覆盖不同缺陷/异物类别的代表性帧图片路径。
+
+        策略（采纳文档建议 2）：不要简单取前几个缺陷帧，而是每种类别各取
+        1-2 帧，让 AI 看到更全面的缺陷分布。总数不超过 max_frames。
+        """
+        image_map = {}
+        for fi in frame_images or []:
+            image_map[fi.get("frame_index")] = fi.get("image_path")
+
+        by_class = {}
+        for fd in frames_data or []:
+            if not fd.get("has_defect"):
+                continue
+            path = image_map.get(fd.get("frame_index"))
+            if not path:
+                continue
+            # 该帧涉及的所有"目标"类别（缺陷 5/6 + 异物 1/2/3）
+            class_ids = {d.get("class_id") for d in fd.get("detections", [])
+                         if d.get("class_id") in (1, 2, 3, 5, 6)}
+            for cid in class_ids:
+                by_class.setdefault(cid, []).append((fd.get("frame_index"), path))
+
+        selected = []
+        # 缺陷类别（5/6）优先，再取异物（1/2/3）
+        order = sorted(by_class.keys(), key=lambda c: (c not in (5, 6), c))
+        for cid in order:
+            for fidx, path in by_class[cid]:
+                if len(selected) >= max_frames:
+                    return selected
+                if any(p == path for _, p in selected):
+                    continue
+                selected.append((fidx, path))
+        return selected
+
+    def _build_defect_stats(self, frames_data: list) -> str:
+        """统计各缺陷/异物类别出现的帧数与最高置信度（供 AI 总结使用）。"""
+        from collections import defaultdict
+        per_class_frames = defaultdict(set)
+        per_class_conf = defaultdict(float)
+        for fd in frames_data or []:
+            for d in fd.get("detections", []):
+                name = self.CLASS_NAMES_ZH.get(d.get("class_id"), d.get("class_name", "未知"))
+                per_class_frames[name].add(fd.get("frame_index"))
+                conf = float(d.get("confidence", 0))
+                if conf > per_class_conf[name]:
+                    per_class_conf[name] = conf
+        lines = []
+        for name, frames in sorted(per_class_frames.items()):
+            lines.append(f"- {name}: 出现在 {len(frames)} 帧, 最高置信度 {per_class_conf[name]:.0%}")
+        return "\n".join(lines) if lines else "未检测到明显缺陷或异物"
+
+    def _build_video_summary_prompt(self, total_frames: int, duration: float,
+                                    defect_count: int, defect_stats: str,
+                                    representative_frames: list) -> str:
+        """构建整段视频总结的提示词（含视频概况 + 缺陷统计 + 代表性帧号）。"""
+        rep_idx = ", ".join(str(fi) for fi, _ in representative_frames) if representative_frames else "无"
+        return f"""你是一位资深的电力输电线路巡检专家。请根据这段巡检视频的检测结果，以及随附的代表性帧图片，对整段视频进行一次性综合总结。
+
+【视频概况】
+- 总帧数: {total_frames}
+- 时长: {duration:.1f} 秒
+- 检测到缺陷/异物的帧数: {defect_count}
+
+【检测到的缺陷/异物统计】
+{defect_stats}
+
+【随附代表性帧】
+以下图片是这段视频中覆盖不同缺陷类型的代表性帧，对应帧号: {rep_idx}
+
+请提供以下分析，并严格按如下 JSON 格式输出（不要输出其他内容，确保 JSON 可被直接解析）：
+```json
+{{
+    "overall_description": "总体描述：这段视频中输电线路的整体状况（1-2句话）",
+    "main_issues": [{{"issue": "主要问题名称", "severity": "严重程度", "frames": [出现该问题的帧号列表]}}],
+    "risk_level": "低/中/高/紧急",
+    "suggestions": "具体的处理建议（如需要检修、更换设备、持续监测等）",
+    "focus_points": "重点关注的时间点或位置（如有）",
+    "extra_notes": "其他需要注意的事项（可选）"
+}}
+```
+
+【风险等级判定标准】
+- 低：无明显缺陷或仅轻微异物，不影响线路安全
+- 中：存在异物或轻微缺陷，短期不影响运行但需关注
+- 高：存在破损绝缘壳或闪燃损坏，可能影响线路稳定
+- 紧急：存在大面积破损、严重闪燃或多处同时损坏，可能导致跳闸或断线
+
+【注意】
+1. main_issues 按严重程度从高到低排序，每项的 frames 字段给出涉及的帧号（从上面统计与代表性帧中推断）
+2. focus_points 若涉及具体帧，用"第X帧附近（MM:SS 时刻）"表述
+3. 若未检测到任何缺陷，请如实描述整体状况良好"""
+
+    def _parse_video_summary_response(self, response_text: str) -> dict:
+        """解析整段视频总结的 JSON 响应，缺省字段补齐默认值。"""
+        json_match = re.search(r'```json\s*\n(.*?)\n```', response_text, re.DOTALL)
+        if not json_match:
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if not json_match:
+            logger.warning(f"无法从视频总结响应中提取 JSON: {response_text[:300]}")
+            return {
+                "overall_description": response_text[:500],
+                "main_issues": [],
+                "risk_level": "中",
+                "suggestions": "请人工复核分析结果",
+                "focus_points": "",
+                "extra_notes": "AI 返回格式异常，仅保留原始文本",
+            }
+        try:
+            # 第一个正则含捕获组(1)，取 JSON 主体；退化的 {.*} 匹配用 group(0)
+            json_str = json_match.group(1) if json_match.groups() else json_match.group(0)
+            result = json.loads(json_str)
+            defaults = {
+                "overall_description": "",
+                "main_issues": [],
+                "risk_level": "中",
+                "suggestions": "",
+                "focus_points": "",
+                "extra_notes": "",
+            }
+            for key, default_value in defaults.items():
+                if key not in result:
+                    result[key] = default_value
+            if not isinstance(result.get("main_issues"), list):
+                result["main_issues"] = []
+            return result
+        except json.JSONDecodeError as e:
+            logger.warning(f"视频总结 JSON 解析失败: {e}")
+            return {
+                "overall_description": response_text[:500],
+                "main_issues": [],
+                "risk_level": "中",
+                "suggestions": "请人工复核分析结果",
+                "focus_points": "",
+                "extra_notes": f"JSON 解析失败: {str(e)}",
+            }
+
+    def generate_video_summary(
+        self,
+        frames_data: list,
+        frame_images: list,
+        total_frames: int,
+        defect_count: int,
+        duration: float,
+    ) -> Tuple[dict, float]:
+        """
+        整段视频一次性 AI 总结（每个视频仅调用一次 Qwen3-VL-Flash）。
+
+        Args:
+            frames_data: 所有帧的检测数据（含 has_defect / detections）
+            frame_images: 帧图片路径列表（用于挑选代表性缺陷帧）
+            total_frames: 总帧数
+            defect_count: 检测到缺陷/异物的帧数
+            duration: 视频时长（秒）
+
+        Returns:
+            (总结结果字典, API 调用耗时(毫秒))
+        """
+        start_time = time.time()
+
+        # 1. 选取覆盖不同缺陷类别的代表性帧
+        representative_frames = self._select_representative_frames(frames_data, frame_images)
+        # 2. 缺陷统计
+        defect_stats = self._build_defect_stats(frames_data)
+        # 3. 构建 Prompt
+        prompt = self._build_video_summary_prompt(
+            total_frames, duration, defect_count, defect_stats, representative_frames,
+        )
+
+        # 4. 构建消息（多图 + 文本）
+        content = []
+        for _, img_path in representative_frames:
+            try:
+                b64 = self._encode_image_to_base64(self._resolve_image_path(img_path))
+                content.append({"image": f"data:image/jpeg;base64,{b64}"})
+            except Exception as e:
+                logger.warning(f"代表性帧读取失败，跳过: {img_path}, {e}")
+        content.append({"text": prompt})
+        messages = [{"role": "user", "content": content}]
+
+        # 5. 调用 API
+        logger.info(f"调用 Qwen3-VL-Flash 生成整段视频总结，代表性帧 {len(representative_frames)} 张")
+        try:
+            response = MultiModalConversation.call(
+                api_key=self.api_key,
+                model=self.MODEL_NAME,
+                messages=messages,
+            )
+            elapsed_ms = (time.time() - start_time) * 1000
+
+            if response.output and response.output.choices:
+                content_out = response.output.choices[0].message.content
+                if isinstance(content_out, list):
+                    response_text = "".join(
+                        item.get("text", "") if isinstance(item, dict) else str(item)
+                        for item in content_out
+                    )
+                else:
+                    response_text = str(content_out)
+            else:
+                response_text = ""
+                logger.warning(f"视频总结 API 返回空内容: {response}")
+
+            logger.info(f"视频总结 API 调用完成，耗时: {elapsed_ms:.0f}ms")
+            result = self._parse_video_summary_response(response_text)
+            result["_api_time_ms"] = round(elapsed_ms, 2)
+            result["_model"] = self.MODEL_NAME
+            result["representative_frames"] = [fi for fi, _ in representative_frames]
+            return result, elapsed_ms
+
+        except Exception as e:
+            elapsed_ms = (time.time() - start_time) * 1000
+            logger.error(f"视频总结 API 调用失败: {e}")
+            raise RuntimeError(f"AI 视频总结调用失败: {str(e)}")

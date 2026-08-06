@@ -276,3 +276,25 @@ body{
     display:inline-block;animation:spin360 1s linear infinite;
 }
 @keyframes spin360{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+
+/* ---- Phase 7.4: AI 分析与兜底检测独立结果区块 ---- */
+.result-block{
+    border:1px solid var(--border);border-radius:var(--radius);
+    padding:10px 14px;margin-top:10px;background:var(--surface);
+}
+.result-block h6{margin-bottom:6px;font-weight:700;}
+.result-block p{margin-bottom:4px;font-size:13px;}
+.ai-report{border-left:4px solid var(--primary);}
+.fallback-report{border-left:4px solid #f39c12;}
+
+/* ---- Phase 28: 派发工单弹窗层级修复 ----
+   从视频详情弹窗 → 帧详情弹窗 → 生成工单 的嵌套打开场景中，
+   派发工单弹窗必须高于所有子 Modal，避免被 backdrop/上层遮罩拦截点击 */
+#dispatch-modal{ z-index: 9999 !important; }
+
+/* ---- Phase 29: 单帧预警等级手动修改 ----
+   等级徽章使用 Bootstrap badge（bg-secondary/info/warning/danger 对应 正常/一般/严重/紧急），
+   此处补充过渡动画与修改记录样式 */
+#current-severity-badge{transition:background-color .2s ease;font-size:.9rem;}
+#severity-mod-info{font-size:12px;}
+#severity-mod-info strong{font-weight:600;}

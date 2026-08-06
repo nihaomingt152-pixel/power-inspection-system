@@ -138,7 +138,8 @@ async function exportOrderReport(orderId) {
 async function loadOrders(page = 1, auto = false) {
     orderPage = page;
     const status = document.getElementById('order-status-filter')?.value || '';
-    let url = `/api/orders?page=${page}&page_size=15`;
+    // 移动端每页 10 条，减少公网传输量（策略3）
+    let url = `/api/orders?page=${page}&page_size=${isMobile() ? 10 : 15}`;
     if (status) url += `&status=${status}`;
 
     const d = await apiGet(url);
@@ -193,12 +194,8 @@ async function showOrderDetail(id) {
 
         // 左右并排对比图片
         let imgHtml = '';
-        const origImg = r.annotated_image_path
-            ? '/api/preview/' + r.annotated_image_path.replace(/\\/g, '/').split('/static/uploads/').pop()
-            : null;
-        const repairImg = r.repair_image_path
-            ? '/api/preview/' + r.repair_image_path.replace(/\\/g, '/').split('/static/uploads/').pop()
-            : null;
+        const origImg = buildPreviewUrl(r.annotated_image_path) || null;
+        const repairImg = buildPreviewUrl(r.repair_image_path) || null;
 
         if (origImg || repairImg) {
             imgHtml = '<div class="row mb-3">';
@@ -218,12 +215,32 @@ async function showOrderDetail(id) {
             imgHtml += `<div class="alert alert-info"><strong>📝 Worker 备注:</strong> ${r.review_remark}</div>`;
         }
 
+        // AI 分析摘要（派发时保存：图片记录=ai_analysis，视频帧=video_summary）
+        let aiSummaryHtml = '';
+        if (r.ai_summary) {
+            const vs = r.ai_summary;
+            const overall = vs.overall_description || vs.description || '';
+            const risk = vs.risk_level || vs.severity || '';
+            const riskClass = { '低': 'success', '中': 'warning', '高': 'danger', '紧急': 'danger', '严重': 'warning' }[risk] || 'secondary';
+            if (overall || risk) {
+                aiSummaryHtml = `<div class="alert alert-light border mt-2 mb-2">
+                    <h6 class="mb-2">🤖 AI 分析摘要</h6>
+                    ${risk ? `<p class="mb-1"><strong>风险等级:</strong> <span class="badge bg-${riskClass}">${risk}</span></p>` : ''}
+                    ${overall ? `<p class="mb-1"><strong>${vs.overall_description ? '总体描述' : '描述'}:</strong> ${overall}</p>` : ''}
+                    ${vs.suggestions ? `<p class="mb-1"><strong>建议:</strong> ${vs.suggestions}</p>` : ''}
+                    ${vs.focus_points ? `<p class="mb-1"><strong>重点关注:</strong> ${vs.focus_points}</p>` : ''}
+                    ${vs.cause ? `<p class="mb-1"><strong>成因:</strong> ${vs.cause}</p>` : ''}
+                </div>`;
+            }
+        }
+
         const body = document.getElementById('order-detail-body');
         if (body) {
             body.innerHTML = `${imgHtml}
                 <h5>${r.title} <span class="${s.cls}">${s.text}</span></h5>
                 <p><strong>严重程度:</strong> <span class="severity-tag severity-${r.severity}">${r.severity}</span></p>
                 <p><strong>描述:</strong> ${r.description || '无'}</p>
+                ${aiSummaryHtml}
                 <p><strong>创建者:</strong> ${r.creator_name || '#' + r.created_by}</p>
                 <p><strong>检修人:</strong> ${r.assignee_name || '#' + r.assigned_to}</p>
                 ${r.reject_reason ? `<p><strong>驳回理由:</strong> ${r.reject_reason}</p>` : ''}

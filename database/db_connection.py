@@ -120,13 +120,19 @@ def init_db():
         _safe_add_column("t_work_orders", "detection_record_id", "INTEGER", "NULL")
         _safe_add_column("t_work_orders", "review_remark", "TEXT", "NULL")
         _safe_add_column("t_work_orders", "close_remark", "TEXT", "NULL")
+        _safe_add_column("t_work_orders", "ai_summary", "TEXT", "NULL")
         _safe_add_column("t_video_detections", "frame_images", "TEXT", "'[]'")
+        _safe_add_column("t_video_detections", "file_md5", "VARCHAR(32)", "NULL")
+        _safe_add_column("t_video_detections", "video_summary", "TEXT", "NULL")
     else:
         _safe_add_column("detection_records", "gps_source", "VARCHAR(16)", "'none'")
         _safe_add_column("t_work_orders", "detection_record_id", "INTEGER", "NULL")
         _safe_add_column("t_work_orders", "review_remark", "TEXT", "NULL")
         _safe_add_column("t_work_orders", "close_remark", "TEXT", "NULL")
+        _safe_add_column("t_work_orders", "ai_summary", "JSON", "NULL")
         _safe_add_column("t_video_detections", "frame_images", "JSON", "'[]'")
+        _safe_add_column("t_video_detections", "file_md5", "VARCHAR(32)", "NULL")
+        _safe_add_column("t_video_detections", "video_summary", "JSON", "NULL")
 
     print(f"[数据库] 初始化完成，类型: {DB_TYPE}")
 

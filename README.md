@@ -1,23 +1,42 @@
-# 电力输电线路智能检测分析预警系统 v2.0
+# 电力输电线路智能检测分析预警系统 v3.0
 
-基于 **YOLO + Qwen3-VL-Flash** 的电力巡检智能分析平台。  
-支持图片检测、视频逐帧分析（带输出视频合成）、实时摄像头检测。
-
----
-
-## 一、v2.0 更新要点
-
-| 改进项 | 说明 |
-|--------|------|
-| **后端架构修复** | 阻塞路由改用 `def` 线程池、DB 会话依赖注入、临时文件 finally 清理、YOLO 推理串行锁 |
-| **视频处理重构** | 逐帧 YOLO（全帧） + 仅缺陷帧调用 AI（`cap.set` 精确跳帧，VideoWriter 合成输出 MP4） |
-| **新 API** | 视频进度轮询 `/api/video/progress/{id}`、输出视频下载、摄像头帧预测 `/api/predict_frame` |
-| **三标签页 UI** | 图片检测（批量网格卡片）、视频分析（双播放器 + AI 时间轴）、实时摄像头（YOLO 实时推理） |
-| **数据库** | 新增 `t_video_tasks` 表跟踪视频分析进度与 AI 报告 |
+基于 **YOLO + Qwen3-VL-Flash** 的电力输电线路智能巡检平台。支持图片 / 视频 / 摄像头多源输入，YOLO 缺陷检测、Qwen3-VL AI 语义分析、兜底异物检测、分级预警、工单闭环管理、GIS 地图总览、数据仪表盘、GPU 硬件监控、Word 报告导出。
 
 ---
 
-## 二、快速开始
+## 一、功能特性
+
+### 智能检测
+- **图片检测**：单张 / 批量上传，YOLO 8 分类检测 + Qwen3-VL AI 语义分析（严重程度 / 成因 / 建议）
+- **视频分析**：智能跳帧 + YOLO 批量推理 + NVENC 硬件编码，整段视频一次性 AI 总结（全程仅调用 1 次 API）
+- **摄像头实时检测**：浏览器摄像头逐帧 YOLO 推理（不调用 AI），Canvas 流光检测框
+
+### 预警与工单
+- **三重预警判定**：YOLO 缺陷 + 置信度阈值 + AI 严重等级，语音播报
+- **工单全流程闭环**：创建 → 派发 → 检修接单 → 提交复检（照片+备注）→ 闭环 / 驳回 → 重新派发
+- **单帧等级手动修改**：任意帧可手动改预警等级（正常/一般/严重/紧急）→ 生成工单，修改记录可追溯
+- 派发工单附带 AI 摘要与缺陷图，Worker 端工单详情完整展示
+
+### 管理与可视化
+- **Admin / Worker 双角色**：前后端双重权限控制 + 数据隔离
+- **GIS 地图总览**（Leaflet）：检测记录 GPS 标记 + **未闭环工单位置**（📌 状态徽标）
+- **数据仪表盘**（ECharts）、**GPU 硬件监控**、**Word 报告导出**
+
+---
+
+## 二、技术栈
+
+| 类别 | 技术 |
+|------|------|
+| 后端 | Python 3.9+ / FastAPI / SQLAlchemy / SQLite（可选 MySQL） |
+| AI | Ultralytics YOLO / PyTorch / DashScope Qwen3-VL-Flash |
+| 视觉 | OpenCV / ffmpeg（NVENC 硬件编码） |
+| 前端 | Bootstrap 5.3 / ECharts 5 / Leaflet.js / Jinja2 |
+| 认证 | bcrypt + Session Cookie |
+
+---
+
+## 三、快速开始
 
 ### 1. 环境准备
 
@@ -27,14 +46,17 @@ cd E:\WorkSpace\TrainModel
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-### 2. 配置 API Key
+### 2. 配置
 
-编辑 `.env` 文件（已生成）：
+编辑 `.env` 文件（模板见 `.env.example`）：
 
 ```env
 DASHSCOPE_API_KEY=你的key
-MAX_VIDEO_SECONDS=60    # 视频分析最大时长，可调整
+MAX_VIDEO_SECONDS=60    # 视频分析最大时长
+YOLO_MODEL_PATH=./runs/train/yolo_train_*/weights/best.pt
 ```
+
+可选：安装 ffmpeg 以启用 NVENC 硬件编码（无 ffmpeg 时自动降级 libx264/OpenCV）。
 
 ### 3. 启动
 
@@ -46,105 +68,121 @@ python app.py
 - **主界面**: http://localhost:5000
 - **API 文档**: http://localhost:5000/docs
 
----
-
-## 三、功能模块
-
-### Tab 1 - 图片检测
-
-- 支持拖拽/点击上传单张或多张图片
-- 单张：完整 YOLO + AI 分析 + 详情面板
-- 批量：网格卡片展示，每张独立标注，点击放大查看 AI 报告
-- 红/黄/绿标签区分严重程度
-
-### Tab 2 - 视频分析
-
-- 上传视频 → 后台逐帧处理
-- **策略**: 每帧 YOLO 推理 + 仅缺陷帧（类别 5/6 且置信度 > 0.7）调用 AI
-- 实时进度条 + 处理帧数显示
-- **双视频对比**: 原始 vs YOLO 标注输出（支持下载）
-- **AI 时间轴**: 点击时间点跳转视频对应位置
-
-### Tab 3 - 实时摄像头
-
-- 调用浏览器摄像头（`getUserMedia`）
-- 每 300ms 截帧 → 后端 YOLO 推理（**不调用 AI 大模型**）
-- 实时显示原始画面 vs 检测结果
-- 滚动日志显示最近 10 条检测结果
+预置账户：
+- **Admin（运维）**：`admin / 123456`
+- **Worker（检修）**：`worker / 123456`
 
 ---
 
-## 四、API 接口
+## 四、页面路由
+
+| 路由 | 页面 | 说明 |
+|------|------|------|
+| `/` | 主检测页 | 图片 / 视频 / 摄像头三标签 |
+| `/login` | 登录注册 | 无需认证，预置账户 |
+| `/dashboard` | 数据仪表盘 | ECharts 趋势图 + 饼图 + 工单卡片 |
+| `/map` | GIS 地图总览 | 检测记录 + 未闭环工单 GPS 标记 |
+| `/orders` | 工单管理 | 工单 CRUD + 状态流转 + 日志时间线 |
+| `/video/play/{id}` | 视频播放 | HTML5 播放 + 时间点跳转 |
+
+---
+
+## 五、视频分析优化（Phase 26-30 亮点）
+
+| 优化项 | 说明 |
+|--------|------|
+| **移动端压缩** | ffmpeg.wasm 上传前压缩至 720P，公网上传缩短约 70% |
+| **进度可视化** | 进度条 + 预估剩余时间 + 已用时间 |
+| **智能跳帧** | 场景变化检测，静止画面复用推理结果（缩短 40-60%） |
+| **YOLO 批处理** | 4 帧批量推理，GPU 利用率提升 2-3 倍 |
+| **整段 AI 总结** | 全程只调用 1 次 API 生成 `video_summary`（取代逐帧 AI） |
+| **NVENC 编码** | ffmpeg 硬件编码标注视频，合成提速 5-10 倍 |
+| **MD5 缓存** | 相同视频重复上传秒级返回缓存结果 |
+| **单帧等级修改** | 任意帧手动改预警等级 → 生成工单 |
+| **未闭环工单地图** | 地图总览标注未闭环工单具体位置 |
+
+---
+
+## 六、YOLO 8 类别
+
+| ID | 类名 | 中文 | 分类 |
+|----|------|------|------|
+| 0 | nest | 鸟巢 | 异物 |
+| 1 | kite | 风筝 | 异物 |
+| 2 | balloon | 气球 | 异物 |
+| 3 | trash | 垃圾 | 异物 |
+| 4 | insulator_shell | 绝缘体外壳 | 正常 |
+| 5 | broken_insulator_shell | 破损绝缘壳 | **缺陷** |
+| 6 | flashover_damaged_insulator_shell | 闪燃损坏绝缘壳 | **缺陷** |
+| 7 | good_insulator_shell | 良好绝缘壳 | 正常 |
+
+---
+
+## 七、数据库
+
+- **默认 SQLite**：零配置，文件 `database/power_inspection.db`
+- **可选 MySQL**：修改 `.env` 中 `DB_TYPE=mysql` 及相关连接信息
+- **增量迁移**：`_safe_add_column` 自动为旧库补充新列，升级无需删库
+
+核心表：
+
+| 表名 | 说明 |
+|------|------|
+| `detection_records` | 图片检测记录（含 GPS） |
+| `t_video_detections` | 视频检测汇总（一条视频一条记录，含 `video_summary` / `file_md5`） |
+| `t_video_tasks` | 视频分析任务进度 |
+| `t_work_orders` | 工单（含 `ai_summary` 字段） |
+| `t_order_logs` | 工单操作日志 |
+| `t_users` | 用户（bcrypt 密码哈希） |
+
+---
+
+## 八、API 概览
 
 | 端点 | 方法 | 功能 |
 |------|------|------|
-| `/api/upload/image` | POST | 单张图片检测 |
+| `/api/auth/login` | POST | 登录（写入 Session Cookie） |
+| `/api/upload/image` | POST | 图片检测 |
 | `/api/upload/batch` | POST | 批量图片检测 |
-| `/api/upload/video` | POST | 上传视频，返回 task_id |
-| `/api/video/progress/{id}` | GET | 轮询视频进度 |
-| `/api/export/video/{filename}` | GET | 下载标注视频 |
-| `/api/predict_frame` | POST | 摄像头帧预测（仅 YOLO） |
-| `/api/history` | GET | 历史记录（分页） |
-| `/api/history/{id}` | GET | 记录详情 |
-| `/api/export/{id}` | GET | 导出 Word 报告 |
-| `/api/status` | GET | 系统状态 |
+| `/api/upload/video` | POST | 视频分析（含 MD5 缓存） |
+| `/api/video/progress/{id}` | GET | 视频进度轮询 |
+| `/api/video/records/{id}/frame/{idx}/severity` | PUT | 修改单帧预警等级 |
+| `/api/orders` | POST / GET | 工单创建 / 列表 |
+| `/api/map/records` | GET | 地图标记（检测记录 + 未闭环工单） |
+| `/api/dashboard/stats` | GET | 仪表盘数据 |
+| `/api/system/status` | GET | GPU 硬件监控 |
+| `/api/export/{id}` | GET | Word 报告导出 |
+
+完整 API 文档见 `/docs`（Swagger UI）。
 
 ---
 
-## 五、数据库
+## 九、常见问题
 
-- **默认 SQLite**：零配置，数据库文件 `database/power_inspection.db`
-- **可选 MySQL**：修改 `.env` 中 `DB_TYPE=mysql` 及相关连接信息
+**Q: 视频分析很慢？**
+A: 默认处理前 60 秒。已启用智能跳帧 + YOLO 批量推理 + NVENC 硬件编码，速度较逐帧分析大幅提升。
 
-新增 `t_video_tasks` 表结构：
+**Q: 输出视频为空 / NVENC 编码失败？**
+A: 系统优先使用 ffmpeg `h264_nvenc`（需 NVIDIA 驱动满足编码器要求）。不支持时自动降级 libx264 / OpenCV，不会中断分析。
 
-| 字段 | 说明 |
-|------|------|
-| `task_id` | UUID 任务标识 |
-| `status` | pending / processing / completed / failed |
-| `total_frames` | 总帧数 |
-| `processed_frames` | 已处理帧数 |
-| `output_video_path` | 输出视频路径 |
-| `ai_reports` | JSON 数组，关键帧 AI 报告 |
-
----
-
-## 六、YOLO 类别
-
-| ID | 名称 | 分类 |
-|----|------|------|
-| 0 | nest | 异物 |
-| 1 | kite | 异物 |
-| 2 | balloon | 异物 |
-| 3 | trash | 异物 |
-| 4 | insulator_shell | 正常 |
-| 5 | broken_insulator_shell | **缺陷** |
-| 6 | flashover_damaged_insulator_shell | **缺陷** |
-| 7 | good_insulator_shell | 正常 |
-
----
-
-## 七、摄像头使用说明
-
-1. 切换到「实时摄像头」标签页
-2. 点击「开启摄像头」→ 浏览器弹出权限请求 → 允许
-3. 系统自动每 300ms 截帧送后端 YOLO 推理
-4. 右侧实时显示检测框标注结果
-5. 底部日志滚动显示检测到的目标
-6. 点击「暂停」释放摄像头和 GPU 资源
-
-> **注意**：摄像头模式不调用 AI 大模型，仅做 YOLO 推理，延迟约 50-150ms/帧。
-> 关闭页面或切换标签时摄像头自动释放。
-
----
-
-## 八、常见问题
-
-**Q: 视频处理很慢？**  
-A: 逐帧 YOLO 推理受 GPU 性能限制。默认处理前 60 秒（约 1500 帧），可在 `.env` 调整 `MAX_VIDEO_SECONDS`。
-
-**Q: AI 分析返回空？**  
+**Q: AI 分析返回空？**
 A: 检查 `.env` 中 `DASHSCOPE_API_KEY` 是否正确，且网络能访问阿里云 DashScope API。
 
-**Q: 摄像头无法开启？**  
-A: 需要 HTTPS 或 localhost 环境，浏览器需授予摄像头权限。Chrome/Firefox/Edge 均支持。
+**Q: 摄像头无法开启？**
+A: 需要 HTTPS 或 localhost 环境，浏览器需授予摄像头权限。
+
+---
+
+## 十、目录结构
+
+```
+app.py                          # FastAPI 主程序（全部路由）
+models/yolo_model.py            # YOLO 检测器封装
+services/                       # 检测/AI/工单/认证/监控/报告服务
+database/                       # SQLAlchemy 模型 + 连接 + 增量迁移
+templates/                      # Jinja2 页面（index/dashboard/map/orders/video_player）
+static/css,js,uploads,outputs   # 前端资源与上传文件
+work/                           # 开发任务与工作备注
+```
+
+> **注意**：训练数据（BaiduData/、my_dataset/、Insulator*）、模型权重（runs/、*.pt）、训练脚本（train_yolo26.py、convert_and_merge.py）、.env、app.log、数据库与上传文件均不随仓库发布（见 `.gitignore`）。

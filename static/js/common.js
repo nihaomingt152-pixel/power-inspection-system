@@ -47,6 +47,13 @@ function errLog(module, msg, data) {
     console.error(`[${module}] ${msg}`, data || '');
 }
 
+// ===== 设备判断（移动端优化用）=====
+// 屏幕宽度 < 768 视为手机（与 Bootstrap 的 md 断点一致）。
+// 移动端启用图片压缩、精简返回、降低轮询频率等优化，电脑端行为完全不变。
+function isMobile() {
+    return window.innerWidth < 768;
+}
+
 // ===== API 请求封装 =====
 async function apiGet(url) {
     log('api', `GET ${url}`);
@@ -80,6 +87,36 @@ async function apiPostJson(url, data) {
         throw new Error(`HTTP ${res.status}: ${text.substring(0, 200)}`);
     }
     return res.json();
+}
+
+async function apiPutJson(url, data) {
+    log('api', `PUT-JSON ${url}`);
+    const res = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`HTTP ${res.status}: ${text.substring(0, 200)}`);
+    }
+    return res.json();
+}
+
+/**
+ * 将存储的图片路径转换为 /api/preview/ 可访问的 URL（Phase 29 修复）。
+ * 兼容三种格式：
+ *   - 相对无前导斜杠：static/uploads/annotated/x.jpg
+ *   - URL 风格：/static/uploads/annotated/x.jpg
+ *   - Windows 绝对路径：E:\WorkSpace\...\static\uploads\annotated\x.jpg
+ * 旧代码用 split('/static/uploads/') 对无前导斜杠的路径匹配失败，导致 URL 多出 static/uploads/ 前缀而 404。
+ */
+function buildPreviewUrl(path) {
+    if (!path) return '';
+    const p = String(path).replace(/\\/g, '/');
+    const m = p.match(/(?:^|\/)static\/uploads\/(.+)$/);
+    const rel = m ? m[1] : p.split('/').pop();
+    return '/api/preview/' + rel;
 }
 
 // ===== DOM 工具 =====

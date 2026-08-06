@@ -19,6 +19,12 @@
   | Phase 7 | 视频检测结果统一存储（一条视频一条记录）+ 帧网格展示 |
   | Phase 7.1 | 所有帧保存真实图片（800x600 JPG）+ 视频删除功能 |
   | Phase 7.2 | UI 优化（视频选择反馈提示、ModalManager 防遮罩残留） |
+  | Phase 8 | 移动端访问性能优化（图片压缩、缩略图精简返回、分页/轮询适配） |
+  | Phase 26 | 视频分析全链路优化（移动端压缩、进度+剩余时间、智能跳帧、YOLO批处理、AI异步、NVENC硬件编码、MD5缓存） |
+  | Phase 27 | 视频AI调用优化（逐帧AI→整段视频一次性总结、取消时间轴、video_summary字段） |
+  | Phase 28 | 视频界面优化（删兜底间隔输入框、AI分析开关控制总结）+ 派发工单修复（弹窗层级遮挡、图片显示、GPS小地图点选） |
+  | Phase 29 | 单帧预警等级手动修改（任意帧改等级→生成工单、等级持久化、修改记录追溯）+ 派发工单 AI 摘要 + 工单图片/AI摘要链路修复 |
+  | Phase 30 | 地图总览显示未闭环工单位置（📌标记+状态徽标、排除已闭环、Worker 数据隔离） |
 
 ## 2. 系统运行逻辑
 
@@ -97,6 +103,7 @@ Bootstrap JS（CDN，先加载）
 | 运行训练 | `python train_yolo26.py`（**训练数据不发布 GitHub**） |
 | 数据集合并 | `python convert_and_merge.py`（**训练数据不发布 GitHub**） |
 | JS语法检查 | `for f in static/js/*.js; do node -c "$f"; done` |
+| 验证ffmpeg | `ffmpeg -version && ffmpeg -hide_banner -encoders 2>&1 | grep nvenc` |
 | 代码存档 | `git add -A && git commit -m "..." && git push` |
 
 ## 4. 项目文件结构
@@ -170,7 +177,7 @@ E:\WorkSpace\TrainModel\
 ### 5.3 工单管理（需登录）
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/orders` | POST | 创建工单（运维，支持 detection_record_id 关联） |
+| `/api/orders` | POST | 创建工单（运维，支持 detection_record_id 关联、annotated_image_path、ai_summary JSON 字符串） |
 | `/api/orders` | GET | 工单列表（分页，检修只看自己的） |
 | `/api/orders/{id}` | GET | 工单详情 |
 | `/api/orders/{id}/accept` | POST | 确认接单（检修） |
@@ -188,14 +195,15 @@ E:\WorkSpace\TrainModel\
 |------|------|------|
 | `/api/video/records/{id}` | GET | 视频检测记录详情（含完整 frames_data） |
 | `/api/video/records/{id}` | DELETE | Admin 删除视频记录 + 清理帧图片物理文件 |
-| `/api/video/records/{id}/frame/{idx}` | GET | 单帧详情（含 AI 分析 + 图片 URL） |
+| `/api/video/records/{id}/frame/{idx}` | GET | 单帧详情（含 AI 分析 + 图片 URL + 等级推断） |
+| `/api/video/records/{id}/frame/{idx}/severity` | PUT | 手动修改单帧预警等级（运维/管理员，Body: severity） |
 | `/api/video/records/{id}/keyframes` | GET | 关键帧列表（网格展示用） |
 
 ### 5.5 数据与状态
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/api/dashboard/stats?days=N` | GET | 仪表盘数据（Worker 数据隔离：仅自己的工单） |
-| `/api/map/records` | GET | GIS 地图 GPS 标记（Worker 仅自己工单的标记） |
+| `/api/map/records` | GET | GIS 地图标记：`data.records`（检测记录）+ `data.orders`（未闭环工单，status≠closed，Worker 仅自己负责的） |
 | `/api/system/status` | GET | GPU 硬件监控（利用率/显存/温度） |
 | `/api/history` | GET | 混合查询（detection_records 图片 + t_video_detections 视频） |
 | `/api/history/{id}` | GET | 记录详情 |
@@ -213,10 +221,10 @@ E:\WorkSpace\TrainModel\
 |------|--------|------|
 | `detection_records` | DetectionRecord | 图片检测记录（含 gps_lat/lng, gps_source, has_abnormal 等） |
 | `t_users` | User | 用户（username 唯一, role 枚举, bcrypt 密码） |
-| `t_work_orders` | WorkOrder | 工单（6状态流转 + review_remark + detection_record_id） |
+| `t_work_orders` | WorkOrder | 工单（6状态流转 + review_remark + detection_record_id + ai_summary） |
 | `t_order_logs` | OrderLog | 工单操作日志（created/accepted/submitted/approved/rejected/reassigned/deleted） |
 | `t_video_tasks` | VideoTask | 视频分析任务（进度跟踪 + AI 报告 JSON） |
-| `t_video_detections` | VideoDetectionRecord | 视频检测汇总（一条视频一条记录，frames_data JSON + frame_images） |
+| `t_video_detections` | VideoDetectionRecord | 视频检测汇总（一条视频一条记录，frames_data JSON + frame_images + video_summary + file_md5） |
 
 ### 6.2 YOLO 8 类别
 | ID | 类名 | 中文 | 分类 |
@@ -244,12 +252,18 @@ rejected →（Admin 重新派发）→ processing
 - **YOLO 推理锁**：`detection_service.py` 中 `threading.Lock` 限制 GPU 串行推理（RTX 4060 8G 显存有限）。
 - **视频后台处理**：上传后立即返回 `task_id`，`threading.Thread` 后台处理，前端轮询进度。
 
-### 7.2 视频处理策略（Phase 7 重构）
+### 7.2 视频处理策略（Phase 7 重构 + Phase 26 优化）
 - **逐帧 YOLO**：`cap.set(CAP_PROP_POS_FRAMES, idx)` 精确跳帧，不做 `while True` 全量遍历。
 - **AI 选择性调用**：仅缺陷帧（类别 5/6 且置信度 >0.7）调用 Qwen3-VL，其余帧只做 YOLO。
 - **帧图片保存（Phase 7.1）**：**所有帧**保存带 YOLO 框的 JPG（缩放 800x600 保持宽高比黑边填充 + 质量 85%），存入 `static/uploads/annotated/video_{task_id}_frame_{index:06d}.jpg`。
 - **汇总记录**：一条视频只产生一条 `VideoDetectionRecord`，`frames_data` JSON 存所有帧数据，`frame_images` 存所有帧图片路径。
 - **VideoWriter 输出**：H.264 编码 MP4，保存至 `static/outputs/`。
+- **智能跳帧（Phase 26）**：灰度帧差均值 < 30 视为画面静止，复用上一次推理结果画框跳过推理（每 5 帧强制推理一次防漏检）；检测到缺陷进入"缺陷追踪模式"密集分析，连续 30 帧干净后退出。
+- **YOLO 批处理（Phase 26）**：缓冲 4 帧一次性推理（`detector.model(batch)`），RTX 4060 8G 上限，GPU 利用率提升。
+- **整段视频一次性 AI 总结（Phase 27）**：**全程不再逐帧调用 AI**（API 从 N 次降为 1 次），视频处理完成后调用一次 `generate_video_summary()`：选取覆盖不同缺陷类别的代表性帧（每类 1-2 张，最多 5 张）+ 缺陷统计，生成结构化 `video_summary` 存入 `t_video_detections.video_summary`。整体严重等级/预警由总结的 `risk_level` 映射（低/中→一般，高→严重，紧急→紧急），不再依赖逐帧 AI。`call_ai=False` 且无缺陷时生成默认"良好"结论。
+- **硬件编码（Phase 26）**：优先 ffmpeg stdin 管道 + `h264_nvenc`（输出尺寸强制偶数兼容 yuv420p），无 ffmpeg 或 NVENC **运行时**不可用时自动降级 libx264/OpenCV。`_has_nvenc_encoder()` 用真实短编码探测（只查 `-encoders` 会误判——最新构建可能要求更新的驱动，如 NVENC API 13.1 需驱动 ≥610）。本机已装 ffmpeg（`C:\ffmpeg\bin`，2026-02 构建，兼容驱动 581），NVENC 可用。
+- **MD5 缓存（Phase 26）**：上传时流式计算文件 MD5，命中 `t_video_detections.file_md5` 已完成记录时直接返回缓存结果（含 `video_summary`，不重复调用 AI），不启动分析线程。
+- **AI 总结展示（Phase 27）**：取消"AI 分析时间轴"（`renderTimeline`/`video-timeline-card` 已移除），改为 `renderVideoSummary()` 同步渲染两处——主检测页"🤖 AI 分析总结"卡片 + 视频详情弹窗总结面板；帧详情弹窗提示查看整段总结。
 
 ### 7.3 认证与安全
 - **密码哈希**：直接使用 `bcrypt` 原生库（hashpw/checkpw/gensalt），**不用 passlib**（与 bcrypt 5.0 不兼容）。
@@ -300,6 +314,16 @@ rejected →（Admin 重新派发）→ processing
   - `close(modalId)`：hide + 延迟 300ms 清理
   - 全局 `hidden.bs.modal` 监听自动清理 `.modal-backdrop`、`modal-open` 类
 - **约定**：**所有 Modal 操作必须使用 `ModalManager.open()` / `ModalManager.close()`**，禁止直接 `new bootstrap.Modal()`。
+- **嵌套弹窗层级（Phase 28）**：视频详情 → 帧详情 → 生成工单（派发）的嵌套打开中，`dispatch-modal` 会因 z-index 低于上层被遮挡。修复双重保障：① `#dispatch-modal { z-index: 9999 !important }`；② `createOrderFromFrame()` 先 `ModalManager.close('frameDetailModal')`，**延迟 350ms** 等 backdrop 清理完成后再打开派发弹窗（`ModalManager.close` 的 300ms 清理窗口内立即 open 会误删新弹窗 backdrop，形成竞态）。
+- **派发工单 GPS 小地图（Phase 28）**：`dispatch-modal` 底部嵌入 Leaflet 小地图 `initDispatchMap()`（复用 `initGpsMiniMap` 模式：点击地图填充经纬度 + 可拖动 Marker），每次打开前销毁旧实例。
+
+### 7.10 移动端优化（Phase 8）📱
+- **设备判断**：`common.js` 全局 `isMobile()` —— `window.innerWidth < 768`（与 Bootstrap md 断点一致），所有优化仅移动端启用，电脑端行为完全不变。
+- **图片上传前压缩**（`main.js` `compressImage()`）：移动端 canvas 绘制缩放（长边 1024px）+ JPEG 质量 0.7，压缩失败回退原文件。公网链路传输时间缩短 60-80%。
+- **检测结果精简返回**：`api_upload_image` 增加 `mobile` 表单参数；`detection_service.py` 生成标注图缩略图（长边 480px，`_thumb.jpg`，`save_image_thumb()`），移动端返回时 `annotated_image_path` 替换为缩略图路径（AI 分析文本保持完整），前端拼 `/api/preview/` URL 逻辑无需改动。
+- **列表分页**：`main.js` `loadHistory()` / `orders.js` `loadOrders()` 移动端 page_size 15→10。
+- **视频轮询**：`main.js` `startVideoPolling()` 移动端间隔 1.5s→5s；`document.hidden` 时跳过请求（切后台自动暂停）。
+- **缩略图命名约定**：`annotated_{ts}_{原文件名}_thumb.jpg`，与标注图同目录 `static/uploads/annotated/`，可被 `/api/preview` 正常访问。
 
 ### 7.9 CDN 依赖与网络
 - **Bootstrap 5.3.3**：CSS + JS 均从 `cdn.jsdelivr.net` 加载。
@@ -353,3 +377,18 @@ rejected →（Admin 重新派发）→ processing
 1. Bootstrap CSS/JS 从 jsdelivr CDN 加载，国内可能慢。
 2. 如持续超时，可下载 Bootstrap 到 `static/` 本地引用。
 3. ECharts 和 Leaflet 仅特定页面使用，不影响主检测页。
+
+### 9.7 图片预览 URL 拼接错误（Phase 29 修复）⚠️
+1. **症状**：视频帧派发工单 / 工单详情 / 检测结果中的图片显示空白或裂图。
+2. **原因**：`split('/static/uploads/')` 对**无前导斜杠**的路径（如 `frame_images` 里的 `static/uploads/annotated/x.jpg`）匹配失败，返回整串路径，导致 URL 变成 `/api/preview/static/uploads/...` 而 404。对带前导斜杠的路径（`/static/uploads/...`）才能正常分割。
+3. **修复**：统一使用 `common.js` 的 `buildPreviewUrl(path)`，正则 `(?:^|\/)static\/uploads\/(.+)$` 兼容相对/URL/Windows 绝对路径三种格式。
+4. **教训**：拼接 `/api/preview/` URL 一律用 `buildPreviewUrl()`，禁止直接用 `split('/static/uploads/')` 手工处理路径。
+
+### 9.8 工单详情无图片（Worker 端）（Phase 29 修复）⚠️
+1. **症状**：派发工单后，检修人员（Worker）在工单详情中看不到缺陷图（图片记录派发与视频帧派发都可能出现）。
+2. **原因**：`POST /api/orders` 需显式传 `annotated_image_path`。视频帧派发（`currentDispatchRecordId=null`）未传图片路径；图片记录派发只传 `detection_record_id`，而 `create_work_order` 此前不自动补图。
+3. **修复**：
+   - `create_work_order`：`detection_record_id` 关联时自动从 DetectionRecord 补 `annotated_image_path`/`original_image_path`
+   - `api_order_detail`：旧工单（无图但有 `detection_record_id`）详情时自动补
+   - 前端：视频帧派发记录 `currentDispatchImagePath`（当前帧 `image_path`），`submitDispatch` 时作为 `annotated_image_path` 传给后端
+4. **注意**：`create_work_order` 不通过 `detection_record_id` 自动关联图片是历史设计，补图逻辑需维护两处（创建 + 详情兼容）。

@@ -5,7 +5,7 @@
 新增: 用户认证、工单管理、GIS 地图、兜底检测、GPU 监控、数据仪表盘。
 """
 
-import os, sys, uuid, base64, logging, tempfile, threading, json
+import os, sys, uuid, base64, logging, tempfile, threading, json, hashlib, time
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, List
@@ -17,6 +17,7 @@ from fastapi import (
     FastAPI, File, UploadFile, Form, Query, HTTPException, Depends, Request, Body,
 )
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
+from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -53,6 +54,15 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("app")
+
+
+def _json_resp(data):
+    """统一 JSON 响应封装：jsonable_encoder 确保 datetime 等类型可序列化。
+
+    历史教训：JSONResponse 的 content 直接经 json.dumps 序列化，datetime 会报
+    "Object of type datetime is not JSON serializable"，必须先转成可序列化类型。
+    """
+    return JSONResponse(content=jsonable_encoder(data))
 
 # ---- FastAPI 应用 ----
 app = FastAPI(title="电力输电线路智能检测分析预警系统 v3.0", version="3.0.0", docs_url="/docs")
@@ -155,7 +165,7 @@ def api_login(
     if not user:
         raise HTTPException(401, "用户名或密码错误")
     token = create_session(user.id)
-    resp = JSONResponse({"success": True, "data": user.to_dict()})
+    resp = _json_resp({"success": True, "data": user.to_dict()})
     resp.set_cookie(SESSION_COOKIE_NAME, token, max_age=SESSION_MAX_AGE,
                     httponly=True, samesite="lax")
     return resp
@@ -175,14 +185,14 @@ def api_register(
         raise HTTPException(400, "角色必须为 inspector 或 repairman")
     try:
         user = create_user(db, username, password, role, full_name or username)
-        return JSONResponse({"success": True, "data": user.to_dict()})
+        return _json_resp({"success": True, "data": user.to_dict()})
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
 @app.get("/api/auth/logout")
 def api_logout():
-    resp = JSONResponse({"success": True})
+    resp = _json_resp({"success": True})
     resp.delete_cookie(SESSION_COOKIE_NAME)
     return resp
 
@@ -191,8 +201,8 @@ def api_logout():
 def api_me(request: Request, db=Depends(get_db)):
     user = get_current_user(request, db)
     if not user:
-        return JSONResponse({"success": True, "data": None})
-    return JSONResponse({"success": True, "data": user.to_dict()})
+        return _json_resp({"success": True, "data": None})
+    return _json_resp({"success": True, "data": user.to_dict()})
 
 
 # ---- 登录检查辅助 ----
@@ -231,6 +241,7 @@ def api_upload_image(
     file: UploadFile = File(...),
     call_ai: bool = Form(True),
     call_fallback: bool = Form(True),
+    mobile: bool = Form(False),
     user: User = Depends(_require_inspector_or_admin),
 ):
     file_ext = Path(file.filename).suffix.lower()
@@ -239,41 +250,52 @@ def api_upload_image(
     tmp_path = None
     try:
         tmp_path = _save_upload_temp(file)
+        # 1. YOLO 检测 + AI 分析（是否调用 AI 由 call_ai 决定）
         result = process_single_image(
             image_path=tmp_path, save_annotated=True, call_ai=call_ai,
         )
 
-        # 兜底检测（异步，不阻塞返回）
-        has_abnormal = False
-        abnormal_desc = ""
+        # 2. 兜底异物检测（独立于 AI 分析，仅受 call_fallback 控制）
+        #    无论 call_ai 是否开启，只要 call_fallback 开启且配置了 API Key 就执行
+        fallback_result = None
         if call_fallback and os.getenv("DASHSCOPE_API_KEY"):
             try:
                 fb = FallbackDetector()
                 fb_result, _ = fb.check(tmp_path)
-                has_abnormal = fb_result.get("abnormal", False)
-                abnormal_desc = fb_result.get("description", "")
-                if has_abnormal:
+                fallback_result = {
+                    "description": fb_result.get("description", ""),
+                    "is_abnormal": bool(fb_result.get("is_abnormal", False)),
+                    "confidence": fb_result.get("confidence", "low"),
+                }
+                if fallback_result["is_abnormal"]:
                     # 更新数据库记录
                     db2 = get_db_session()
                     rec = db2.query(DetectionRecord).filter(
                         DetectionRecord.id == result.get("record_id")
                     ).first()
                     if rec:
-                        rec.has_abnormal = has_abnormal
-                        rec.abnormal_desc = abnormal_desc
+                        rec.has_abnormal = True
+                        rec.abnormal_desc = fallback_result["description"]
                         db2.commit()
                     db2.close()
             except Exception as e:
                 logger.warning(f"兜底检测异常: {e}")
 
+        # 3. 组装返回（fallback_result 结构化 + 兼容旧字段）
+        has_abnormal = bool(fallback_result and fallback_result["is_abnormal"])
+        result["fallback_result"] = fallback_result
         result["has_abnormal"] = has_abnormal
-        result["abnormal_desc"] = abnormal_desc
-        # 语音播报标识
+        result["abnormal_desc"] = fallback_result["description"] if fallback_result else ""
+        # 语音播报标识（依赖 AI 分析的严重等级）
         ai = result.get("ai_analysis") or {}
         sev = ai.get("severity", "一般")
         result["speech_alert"] = sev in ("严重", "紧急")
 
-        return JSONResponse({"success": True, "data": result, "message": "检测完成"})
+        # 移动端精简返回：图片 URL 指向缩略图，避免公网加载大图（AI 分析文本保持完整）
+        if mobile and result.get("annotated_thumb_path"):
+            result["annotated_image_path"] = result.pop("annotated_thumb_path")
+
+        return _json_resp({"success": True, "data": result, "message": "检测完成"})
     except Exception as e:
         logger.error(f"图片处理失败: {e}", exc_info=True)
         raise HTTPException(500, f"处理失败: {str(e)}")
@@ -309,7 +331,7 @@ def api_upload_batch(
             if tmp_path and os.path.exists(tmp_path):
                 try: os.unlink(tmp_path)
                 except OSError: pass
-    return JSONResponse({
+    return _json_resp({
         "success": len(errors) == 0, "total": len(files),
         "processed": len(results), "errors": errors, "data": results,
     })
@@ -320,23 +342,45 @@ def api_upload_batch(
 # ============================================================
 
 ALLOWED_VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv", ".webm"}
+MAX_VIDEO_SIZE = int(os.getenv("MAX_VIDEO_SIZE", str(500 * 1024 * 1024)))  # 500MB 上限
 _video_progress: dict = {}
 _video_progress_lock = threading.Lock()
 
 
-def _run_video_processing(task_id: str, video_path: str, call_ai: bool, fallback_interval: int = 5, user_id: int = None):
+def _update_progress(task_id: str, processed: int, total: int, start_time: float):
+    """更新进度并估算剩余时间（优化2：进度可视化）。"""
+    with _video_progress_lock:
+        elapsed = time.time() - start_time
+        avg_time = elapsed / processed if processed > 0 else 0
+        remaining = avg_time * (total - processed) if total > 0 else 0
+        _video_progress[task_id] = {
+            "status": "processing",
+            "processed": processed,
+            "total": total,
+            "elapsed_seconds": int(elapsed),
+            "estimated_remaining": int(remaining),
+            "progress_percent": int((processed / total) * 100) if total > 0 else 0,
+        }
+
+
+def _run_video_processing(task_id: str, video_path: str, call_ai: bool, fallback_interval: int = 5, user_id: int = None, file_md5: str = None):
     db = get_db_session()
+    start_time = time.time()
     try:
         with _video_progress_lock:
             _video_progress[task_id] = {"status": "processing", "processed": 0, "total": 0}
         result = process_video_file(
             video_path=video_path, db=db, task_id=task_id, call_ai=call_ai, user_id=user_id,
+            file_md5=file_md5,
+            progress_callback=lambda p, t: _update_progress(task_id, p, t, start_time),
         )
         with _video_progress_lock:
             _video_progress[task_id] = {
                 "status": "completed", "processed": result["total_frames"],
                 "total": result["total_frames"], "output_video": result["output_video"],
                 "ai_reports": result["ai_reports"], "stats": result["stats"],
+                "video_summary": result.get("video_summary"),
+                "progress_percent": 100, "estimated_remaining": 0, "elapsed_seconds": int(time.time() - start_time),
             }
     except Exception as e:
         logger.error(f"视频异常 [{task_id}]: {e}", exc_info=True)
@@ -364,6 +408,57 @@ def api_upload_video(file: UploadFile = File(...), call_ai: bool = Form(True),
     os.close(fd)
     with open(tmp, "wb") as f:
         f.write(file.file.read())
+
+    # 文件大小校验（优化1 后端兜底：移动端未压缩时拒绝超大文件）
+    if os.path.getsize(tmp) > MAX_VIDEO_SIZE:
+        try: os.unlink(tmp)
+        except OSError: pass
+        raise HTTPException(400, "视频文件过大，请压缩后重试（限制 500MB）")
+
+    # 计算文件 MD5（流式，不占用内存；优化7 重复上传缓存）
+    hash_md5 = hashlib.md5()
+    with open(tmp, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    file_md5 = hash_md5.hexdigest()
+
+    # 查询缓存：相同视频已分析过则直接返回历史结果
+    db = get_db_session()
+    try:
+        from database.models import VideoDetectionRecord as VDR
+        cached = db.query(VDR).filter(VDR.file_md5 == file_md5).first()
+        if cached and cached.status == "completed":
+            # 从 frames_data 重建 AI 报告（保持时间轴展示）
+            cached_ai_reports = []
+            for fd in (cached.frames_data or []):
+                ai = fd.get("ai_analysis")
+                if ai:
+                    cached_ai_reports.append({
+                        "timestamp": fd.get("timestamp", 0),
+                        "frame_index": fd.get("frame_index", 0),
+                        "description": ai.get("description", "")[:300],
+                        "severity": ai.get("severity", "未知"),
+                        "cause": ai.get("cause", ""),
+                        "suggestion": ai.get("suggestion", ""),
+                    })
+            cached_ai_reports.sort(key=lambda x: x["frame_index"])
+            return _json_resp({"success": True, "data": {
+                "task_id": cached.task_id,
+                "from_cache": True,
+                "record_id": cached.id,
+                "status": "completed",
+                "progress_percent": 100,
+                "processed_frames": cached.total_frames,
+                "total_frames": cached.total_frames,
+                "output_video": cached.output_video_path,
+                "ai_reports": cached_ai_reports,
+                "video_summary": cached.video_summary,
+                "stats": {"total_frames": cached.total_frames, "defect_count": cached.defect_count,
+                          "severity": cached.severity, "from_cache": True},
+            }})
+    finally:
+        db.close()
+
     task_id = uuid.uuid4().hex
     db = get_db_session()
     try:
@@ -374,8 +469,8 @@ def api_upload_video(file: UploadFile = File(...), call_ai: bool = Form(True),
         db.rollback(); raise HTTPException(500, str(e))
     finally: db.close()
     threading.Thread(target=_run_video_processing,
-                     args=(task_id, tmp, call_ai, fallback_interval, user.id), daemon=True).start()
-    return JSONResponse({"success": True, "data": {"task_id": task_id, "status": "pending"}})
+                     args=(task_id, tmp, call_ai, fallback_interval, user.id, file_md5), daemon=True).start()
+    return _json_resp({"success": True, "data": {"task_id": task_id, "status": "pending"}})
 
 
 @app.get("/api/video/progress/{task_id}")
@@ -388,7 +483,7 @@ def api_video_progress(task_id: str):
         if not task: raise HTTPException(404, "任务不存在")
         data = task.to_dict()
         if mem: data.update(mem)
-        return JSONResponse({"success": True, "data": data})
+        return _json_resp({"success": True, "data": data})
     finally: db.close()
 
 
@@ -402,7 +497,7 @@ def api_video_record_detail(record_id: int, request: Request, db=Depends(get_db)
     r = db.query(VDR).filter(VDR.id == record_id).first()
     if not r:
         raise HTTPException(404, "视频记录不存在")
-    return JSONResponse({"success": True, "data": r.to_dict()})
+    return _json_resp({"success": True, "data": r.to_dict()})
 
 
 @app.delete("/api/video/records/{record_id}")
@@ -452,7 +547,7 @@ def api_video_record_delete(record_id: int, request: Request, db=Depends(get_db)
     db.commit()
     logger.info(f"视频记录 #{record_id} 已删除（含 {deleted_files} 张帧图片）by user {user.id}")
 
-    return JSONResponse({"success": True, "data": {
+    return _json_resp({"success": True, "data": {
         "id": record_id,
         "deleted_images": deleted_files,
     }, "message": f"视频记录已删除，清理了 {deleted_files} 张帧图片"})
@@ -489,11 +584,74 @@ def api_video_record_frame(record_id: int, frame_index: int, request: Request, d
                 image_url = "/" + kf["image_path"]
                 break
 
-    return JSONResponse({"success": True, "data": {
+    # Phase 29: 推断帧等级（兼容旧数据：has_defect → 严重，否则正常）
+    original_severity = frame.get("original_severity") or ("严重" if frame.get("has_defect") else "正常")
+    severity_override = frame.get("severity_override")
+
+    return _json_resp({"success": True, "data": {
         **frame,
+        "original_severity": original_severity,
+        "severity_override": severity_override,
+        "effective_severity": severity_override or original_severity,
+        "severity_modified_at": frame.get("severity_modified_at"),
+        "severity_modified_by": frame.get("severity_modified_by"),
+        "severity_modified_by_name": frame.get("severity_modified_by_name"),
         "image_url": image_url,
         "total_frames": r.total_frames,
         "output_video_path": r.output_video_path,
+    }})
+
+
+@app.put("/api/video/records/{record_id}/frame/{frame_index}/severity")
+def api_video_record_frame_severity(record_id: int, frame_index: int,
+                                    severity: str = Body(..., embed=True),
+                                    request: Request = None,
+                                    db=Depends(get_db)):
+    """手动修改单帧预警等级（Phase 29，仅运维/管理员）。
+
+    更新 frames_data 中对应帧的 severity_override 及修改记录，
+    前端据此可对任意帧（含 YOLO 判定为正常者）生成工单。
+    """
+    user = require_login(request, db)
+    if user.role not in ("inspector", "admin"):
+        raise HTTPException(403, "仅运维人员可修改预警等级")
+    if severity not in ("正常", "一般", "严重", "紧急"):
+        raise HTTPException(400, "等级必须为: 正常/一般/严重/紧急")
+
+    from database.models import VideoDetectionRecord as VDR
+    r = db.query(VDR).filter(VDR.id == record_id).first()
+    if not r or not r.frames_data:
+        raise HTTPException(404, "视频记录或帧数据不存在")
+    frame = None
+    for f in r.frames_data:
+        if f.get("frame_index") == frame_index:
+            frame = f
+            break
+    if not frame:
+        raise HTTPException(404, f"帧 #{frame_index} 不存在")
+
+    # 记录原始等级（首次修改时按 YOLO 结果推断）
+    if not frame.get("original_severity"):
+        frame["original_severity"] = "严重" if frame.get("has_defect") else "正常"
+
+    frame["severity_override"] = severity
+    frame["severity_modified_at"] = datetime.now().isoformat()
+    frame["severity_modified_by"] = user.id
+    frame["severity_modified_by_name"] = user.full_name or user.username
+
+    # JSON 列显式标记变更（SQLAlchemy 对可变形列表不自动追踪）
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(r, "frames_data")
+    db.commit()
+
+    return _json_resp({"success": True, "data": {
+        "frame_index": frame_index,
+        "original_severity": frame["original_severity"],
+        "severity_override": severity,
+        "effective_severity": severity,
+        "severity_modified_at": frame["severity_modified_at"],
+        "severity_modified_by": frame["severity_modified_by"],
+        "severity_modified_by_name": frame["severity_modified_by_name"],
     }})
 
 
@@ -518,7 +676,7 @@ def api_video_record_keyframes(record_id: int, request: Request, db=Depends(get_
             "severity": kf.get("severity", "一般"),
         })
 
-    return JSONResponse({"success": True, "data": {
+    return _json_resp({"success": True, "data": {
         "keyframes": result,
         "total_frames": r.total_frames,
         "output_video_path": r.output_video_path,
@@ -543,7 +701,7 @@ def api_predict_frame(payload: dict = Body(...),
     if not b64: raise HTTPException(400, "缺少 image 字段")
     try:
         result = predict_frame_base64(b64)
-        return JSONResponse({"success": True, "data": result})
+        return _json_resp({"success": True, "data": result})
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -564,11 +722,19 @@ def api_create_order(
     gps_lat: float = Form(None),
     gps_lng: float = Form(None),
     detection_record_id: int = Form(None),
+    ai_summary: str = Form(""),
     db=Depends(get_db),
 ):
     user = require_login(request, db)
     if user.role not in ("inspector", "admin"):
         raise HTTPException(403, "仅运维人员可创建工单")
+    # 前端以 JSON 字符串提交 AI 摘要（图片记录 = ai_analysis，视频帧 = video_summary）
+    ai_summary_dict = None
+    if ai_summary:
+        try:
+            ai_summary_dict = json.loads(ai_summary)
+        except (ValueError, TypeError):
+            logger.warning(f"ai_summary 解析失败: {ai_summary[:100]}")
     try:
         order = create_work_order(
             db, title=title, description=description, severity=severity,
@@ -577,8 +743,9 @@ def api_create_order(
             annotated_image_path=annotated_image_path,
             gps_lat=gps_lat, gps_lng=gps_lng,
             detection_record_id=detection_record_id,
+            ai_summary=ai_summary_dict,
         )
-        return JSONResponse({"success": True, "data": order.to_dict()})
+        return _json_resp({"success": True, "data": order.to_dict()})
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -593,7 +760,7 @@ def api_list_orders(
 ):
     user = require_login(request, db)
     result = list_work_orders(db, user, status_filter=status, page=page, page_size=page_size)
-    return JSONResponse({"success": True, "data": result})
+    return _json_resp({"success": True, "data": result})
 
 
 @app.get("/api/orders/{order_id}")
@@ -601,7 +768,16 @@ def api_order_detail(order_id: int, request: Request, db=Depends(get_db)):
     require_login(request, db)
     try:
         order = get_order_detail(db, order_id)
-        return JSONResponse({"success": True, "data": order.to_dict()})
+        # 兼容旧工单：关联了检测记录但未存图片/AI摘要时自动补（Worker 端工单详情显示）
+        if order.detection_record_id and (not order.annotated_image_path or not order.ai_summary):
+            from database.models import DetectionRecord
+            det = db.query(DetectionRecord).filter(DetectionRecord.id == order.detection_record_id).first()
+            if det:
+                if not order.annotated_image_path and det.annotated_image_path:
+                    order.annotated_image_path = det.annotated_image_path
+                if not order.ai_summary and det.ai_analysis:
+                    order.ai_summary = det.ai_analysis
+        return _json_resp({"success": True, "data": order.to_dict()})
     except ValueError as e:
         raise HTTPException(404, str(e))
 
@@ -611,7 +787,7 @@ def api_accept_order(order_id: int, request: Request, db=Depends(get_db)):
     user = require_login(request, db)
     try:
         order = accept_order(db, order_id, user.id)
-        return JSONResponse({"success": True, "data": order.to_dict()})
+        return _json_resp({"success": True, "data": order.to_dict()})
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -635,7 +811,7 @@ def api_submit_review(
     try:
         order = submit_review(db, order_id, user.id, repair_path,
                               review_remark=review_remark or None)
-        return JSONResponse({"success": True, "data": order.to_dict()})
+        return _json_resp({"success": True, "data": order.to_dict()})
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -650,7 +826,7 @@ def api_approve_order(
     user = require_login(request, db)
     try:
         order = approve_order(db, order_id, user.id, close_remark=close_remark)
-        return JSONResponse({"success": True, "data": order.to_dict()})
+        return _json_resp({"success": True, "data": order.to_dict()})
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -664,7 +840,7 @@ def api_reject_order(
     user = require_login(request, db)
     try:
         order = reject_order(db, order_id, user.id, reason or "需要重新检修")
-        return JSONResponse({"success": True, "data": order.to_dict()})
+        return _json_resp({"success": True, "data": order.to_dict()})
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -687,7 +863,7 @@ def api_reassign_order(
             description=payload.get("description"),
             severity=payload.get("severity"),
         )
-        return JSONResponse({"success": True, "data": order.to_dict()})
+        return _json_resp({"success": True, "data": order.to_dict()})
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -706,7 +882,7 @@ def api_reject_order_worker(
         raise HTTPException(400, "选择「其他」时请填写补充说明")
     try:
         order = reject_order_worker(db, order_id, user.id, reason, remark)
-        return JSONResponse({"success": True, "data": order.to_dict()})
+        return _json_resp({"success": True, "data": order.to_dict()})
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -719,7 +895,7 @@ def api_delete_order(order_id: int, request: Request, db=Depends(get_db)):
         raise HTTPException(403, "仅运维人员可删除工单")
     try:
         info = delete_order(db, order_id, user.id)
-        return JSONResponse({"success": True, "data": info,
+        return _json_resp({"success": True, "data": info,
                              "message": f"工单 #{order_id} 已删除"})
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -730,7 +906,7 @@ def api_order_logs(order_id: int, request: Request, db=Depends(get_db)):
     """获取工单操作日志。"""
     require_login(request, db)
     logs = get_order_logs(db, order_id)
-    return JSONResponse({"success": True, "data": logs})
+    return _json_resp({"success": True, "data": logs})
 
 
 @app.get("/api/orders/{order_id}/export-report")
@@ -763,7 +939,7 @@ def api_export_order_report(order_id: int, request: Request, db=Depends(get_db))
 
 @app.get("/api/repairmen")
 def api_repairmen(db=Depends(get_db)):
-    return JSONResponse({"success": True, "data": get_repairmen(db)})
+    return _json_resp({"success": True, "data": get_repairmen(db)})
 
 
 # ============================================================
@@ -839,7 +1015,7 @@ def api_dashboard_stats(
             total_query = total_query.filter(DetectionRecord.id == -1)
     total_detections = total_query.count()
 
-    return JSONResponse({"success": True, "data": {
+    return _json_resp({"success": True, "data": {
         "total_detections": total_detections,
         "trend": trend,
         "category_distribution": cat_count,
@@ -892,12 +1068,44 @@ def api_map_records(request: Request, db=Depends(get_db)):
                 if r.yolo_detections else "未知"
             ),
             "created_at": r.created_at.isoformat() if r.created_at else None,
-            "thumbnail": (
-                r.annotated_image_path.replace("\\", "/").split("/static/uploads/")[-1]
-                if r.annotated_image_path else ""
-            ),
+            "annotated_image_path": r.annotated_image_path or "",
         })
-    return JSONResponse({"success": True, "data": markers})
+
+    # ---- 未闭环工单标记（Phase 29：显示未完成闭环工单的具体位置）----
+    # 工单状态: pending/processing/pending_review/rejected 均为未闭环；closed 为已闭环
+    order_q = db.query(WorkOrder).filter(
+        WorkOrder.gps_lat.isnot(None),
+        WorkOrder.gps_lng.isnot(None),
+        WorkOrder.status != "closed",
+    )
+    if user and user.role == "repairman":
+        order_q = order_q.filter(WorkOrder.assigned_to == user.id)
+    orders = order_q.order_by(WorkOrder.created_at.desc()).limit(500).all()
+
+    order_status_text = {
+        "pending": "待派发", "processing": "处理中",
+        "pending_review": "待复检", "rejected": "已驳回",
+    }
+    order_markers = []
+    for o in orders:
+        order_markers.append({
+            "id": o.id,
+            "type": "order",
+            "lat": o.gps_lat,
+            "lng": o.gps_lng,
+            "title": o.title,
+            "severity": o.severity,
+            "status": o.status,
+            "status_text": order_status_text.get(o.status, o.status),
+            "assignee": o.assignee.full_name if o.assignee else None,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+            "annotated_image_path": o.annotated_image_path or "",
+        })
+
+    return _json_resp({"success": True, "data": {
+        "records": markers,
+        "orders": order_markers,
+    }})
 
 
 # ============================================================
@@ -913,7 +1121,7 @@ def api_system_status():
         model_ok, model_path = True, detector.model_path
     except:
         model_ok, model_path = False, None
-    return JSONResponse({"success": True, "data": {
+    return _json_resp({"success": True, "data": {
         "gpu": gpu,
         "model_loaded": model_ok,
         "model_path": model_path,
@@ -969,7 +1177,7 @@ def api_history(
     end = start + page_size
     records = all_records[start:end]
 
-    return JSONResponse({"success": True, "data": {
+    return _json_resp({"success": True, "data": {
         "total": total, "page": page, "page_size": page_size,
         "total_pages": total_pages,
         "records": records,
@@ -980,7 +1188,7 @@ def api_history(
 def api_history_detail(record_id: int, db=Depends(get_db)):
     r = db.query(DetectionRecord).filter(DetectionRecord.id == record_id).first()
     if not r: raise HTTPException(404, "记录不存在")
-    return JSONResponse({"success": True, "data": r.to_dict()})
+    return _json_resp({"success": True, "data": r.to_dict()})
 
 
 @app.delete("/api/history/{record_id}")
@@ -1003,6 +1211,11 @@ def api_delete_record(record_id: int, request: Request, db=Depends(get_db)):
                 img_path.unlink()
                 deleted_image = True
                 logger.info(f"删除标注图片: {img_path}")
+            # 顺带删除移动端缩略图（Phase 8：与标注图同名的 _thumb.jpg，防止残留）
+            thumb_path = img_path.with_name(img_path.stem + "_thumb.jpg")
+            if thumb_path.exists() and thumb_path.is_file():
+                thumb_path.unlink()
+                logger.info(f"删除缩略图: {thumb_path}")
         except Exception as e:
             logger.warning(f"删除标注图片失败: {e}")
 
@@ -1016,7 +1229,7 @@ def api_delete_record(record_id: int, request: Request, db=Depends(get_db)):
     db.commit()
     logger.info(f"检测记录 #{record_id} 已删除 by user {user.id}（标注图片已删: {deleted_image}）")
 
-    return JSONResponse({"success": True, "data": {
+    return _json_resp({"success": True, "data": {
         "id": record_id,
         "annotated_image_deleted": deleted_image,
     }, "message": "记录已删除"})
@@ -1042,7 +1255,7 @@ def api_update_record_gps(
     r.gps_source = "manual"
     db.commit()
     logger.info(f"GPS 手动更新: 记录 #{record_id} → ({gps_lat}, {gps_lng})")
-    return JSONResponse({"success": True, "data": r.to_dict()})
+    return _json_resp({"success": True, "data": r.to_dict()})
 
 
 @app.get("/api/export/{record_id}")
@@ -1073,7 +1286,7 @@ async def api_status():
         m_ok, mp = True, d.model_path
     except:
         m_ok, mp = False, None
-    return JSONResponse({"success": True, "data": {
+    return _json_resp({"success": True, "data": {
         "model_loaded": m_ok, "model_path": mp,
         "dashscope_available": bool(os.getenv("DASHSCOPE_API_KEY")),
         "cuda_available": True, "gpu_name": "GPU",
