@@ -79,6 +79,7 @@ class DetectionRecord(Base):
     alert_message = Column(Text, nullable=True)
     has_abnormal = Column(Boolean, default=False, comment="兜底检测是否发现异常异物")
     abnormal_desc = Column(Text, nullable=True, comment="兜底检测异常描述")
+    fallback_result = Column(JSON, nullable=True, comment="兜底异物检测完整结果（description/is_abnormal/confidence）")
 
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
@@ -113,6 +114,7 @@ class DetectionRecord(Base):
             "alert_message": self.alert_message,
             "has_abnormal": self.has_abnormal,
             "abnormal_desc": self.abnormal_desc,
+            "fallback_result": self.fallback_result,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "yolo_time_ms": self.yolo_time_ms,
             "ai_time_ms": self.ai_time_ms,

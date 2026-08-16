@@ -267,16 +267,18 @@ def api_upload_image(
                     "is_abnormal": bool(fb_result.get("is_abnormal", False)),
                     "confidence": fb_result.get("confidence", "low"),
                 }
-                if fallback_result["is_abnormal"]:
-                    # 更新数据库记录
-                    db2 = get_db_session()
+                # 无论是否异常都保存完整结果，供历史详情展示；未勾选兜底时保持不写入
+                db2 = get_db_session()
+                try:
                     rec = db2.query(DetectionRecord).filter(
                         DetectionRecord.id == result.get("record_id")
                     ).first()
                     if rec:
-                        rec.has_abnormal = True
+                        rec.fallback_result = fallback_result
+                        rec.has_abnormal = bool(fallback_result["is_abnormal"])
                         rec.abnormal_desc = fallback_result["description"]
                         db2.commit()
+                finally:
                     db2.close()
             except Exception as e:
                 logger.warning(f"兜底检测异常: {e}")
@@ -489,6 +491,43 @@ def api_video_progress(task_id: str):
 
 # ---- 视频检测记录 API（Phase 7）----
 
+def _delete_video_record(db, record):
+    """删除视频检测记录：清理帧图片/关键帧图片并删除关联的 VideoTask。"""
+    frame_images = record.frame_images or []
+    keyframe_images = record.keyframe_images or []
+    all_images = frame_images + [kf for kf in keyframe_images
+                                 if not any(fi.get("image_path") == kf.get("image_path") for fi in frame_images)]
+    deleted_files = 0
+
+    # 删除物理图片文件
+    for img in all_images:
+        img_path = img.get("image_path") if isinstance(img, dict) else img
+        if not img_path:
+            continue
+        # 兼容绝对/相对路径
+        fp = Path(img_path)
+        if not fp.is_absolute():
+            fp = PROJECT_ROOT / fp
+        if fp.exists() and fp.is_file():
+            try:
+                fp.unlink()
+                deleted_files += 1
+            except OSError as e:
+                logger.warning(f"删除帧图片失败: {fp}, {e}")
+
+    # 删除关联的 VideoTask（如有）
+    try:
+        vt = db.query(VideoTask).filter(VideoTask.task_id == record.task_id).first()
+        if vt:
+            db.delete(vt)
+    except Exception as e:
+        logger.warning(f"删除 VideoTask 失败: {e}")
+
+    db.delete(record)
+    db.commit()
+    return deleted_files
+
+
 @app.get("/api/video/records/{record_id}")
 def api_video_record_detail(record_id: int, request: Request, db=Depends(get_db)):
     """获取视频检测记录详情（含完整 frames_data）。"""
@@ -512,39 +551,7 @@ def api_video_record_delete(record_id: int, request: Request, db=Depends(get_db)
     if not r:
         raise HTTPException(404, "视频记录不存在")
 
-    # 统计帧图片数量（用于确认提示）
-    frame_images = r.frame_images or []
-    keyframe_images = r.keyframe_images or []
-    all_images = frame_images + [kf for kf in keyframe_images
-                                 if not any(fi.get("image_path") == kf.get("image_path") for fi in frame_images)]
-    deleted_files = 0
-
-    # 删除物理图片文件
-    for img in all_images:
-        img_path = img.get("image_path") if isinstance(img, dict) else img
-        if not img_path:
-            continue
-        # 兼容绝对/相对路径
-        fp = Path(img_path)
-        if not fp.is_absolute():
-            fp = PROJECT_ROOT / fp
-        if fp.exists() and fp.is_file():
-            try:
-                fp.unlink()
-                deleted_files += 1
-            except OSError as e:
-                logger.warning(f"删除帧图片失败: {fp}, {e}")
-
-    # 删除关联的 VideoTask（如有）
-    try:
-        vt = db.query(VideoTask).filter(VideoTask.task_id == r.task_id).first()
-        if vt:
-            db.delete(vt)
-    except Exception as e:
-        logger.warning(f"删除 VideoTask 失败: {e}")
-
-    db.delete(r)
-    db.commit()
+    deleted_files = _delete_video_record(db, r)
     logger.info(f"视频记录 #{record_id} 已删除（含 {deleted_files} 张帧图片）by user {user.id}")
 
     return _json_resp({"success": True, "data": {
@@ -901,6 +908,37 @@ def api_delete_order(order_id: int, request: Request, db=Depends(get_db)):
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/orders/batch-delete")
+def api_batch_delete_orders(request: Request, payload: dict = Body(...), db=Depends(get_db)):
+    """批量硬删除工单，支持部分失败。"""
+    user = require_login(request, db)
+    if user.role not in ("inspector", "admin"):
+        raise HTTPException(403, "仅运维人员可删除工单")
+
+    order_ids = payload.get("ids") or []
+    if not isinstance(order_ids, list) or not order_ids:
+        raise HTTPException(400, "请至少选择一个工单")
+
+    deleted = 0
+    failed = []
+    for order_id in order_ids:
+        try:
+            delete_order(db, order_id, user.id)
+            deleted += 1
+        except ValueError as e:
+            failed.append({"id": order_id, "reason": str(e)})
+        except Exception as e:
+            db.rollback()
+            failed.append({"id": order_id, "reason": str(e)})
+            logger.error(f"批量删除工单失败: id={order_id}, {e}")
+
+    logger.info(f"批量删除工单: 成功 {deleted} 条，失败 {len(failed)} 条 by user {user.id}")
+    return _json_resp({"success": True, "data": {
+        "deleted": deleted,
+        "failed": failed,
+    }, "message": f"已删除 {deleted} 个工单"})
+
+
 @app.get("/api/orders/{order_id}/logs")
 def api_order_logs(order_id: int, request: Request, db=Depends(get_db)):
     """获取工单操作日志。"""
@@ -1134,6 +1172,35 @@ def api_system_status():
 # 历史记录 & 导出 & 预览（保留 Phase 1）
 # ============================================================
 
+def _delete_image_record(db, record):
+    """删除图片检测记录：清理标注图与缩略图，并解除工单关联（方案B）。"""
+    deleted_image = False
+    # 删除标注图片（物理文件，仅 annotated，保留原始图）
+    if record.annotated_image_path:
+        try:
+            img_path = Path(record.annotated_image_path)
+            if img_path.exists() and img_path.is_file():
+                img_path.unlink()
+                deleted_image = True
+                logger.info(f"删除标注图片: {img_path}")
+            # 顺带删除移动端缩略图（Phase 8：与标注图同名的 _thumb.jpg，防止残留）
+            thumb_path = img_path.with_name(img_path.stem + "_thumb.jpg")
+            if thumb_path.exists() and thumb_path.is_file():
+                thumb_path.unlink()
+                logger.info(f"删除缩略图: {thumb_path}")
+        except Exception as e:
+            logger.warning(f"删除标注图片失败: {e}")
+
+    # 解除工单关联（方案B：仅置 NULL，保留工单记录）
+    db.query(WorkOrder).filter(
+        WorkOrder.detection_record_id == record.id
+    ).update({"detection_record_id": None})
+
+    db.delete(record)
+    db.commit()
+    return deleted_image
+
+
 @app.get("/api/history")
 def api_history(
     page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
@@ -1202,37 +1269,62 @@ def api_delete_record(record_id: int, request: Request, db=Depends(get_db)):
     if not record:
         raise HTTPException(404, "记录不存在")
 
-    deleted_image = False
-    # 删除标注图片（物理文件，仅 annotated，保留原始图）
-    if record.annotated_image_path:
-        try:
-            img_path = Path(record.annotated_image_path)
-            if img_path.exists() and img_path.is_file():
-                img_path.unlink()
-                deleted_image = True
-                logger.info(f"删除标注图片: {img_path}")
-            # 顺带删除移动端缩略图（Phase 8：与标注图同名的 _thumb.jpg，防止残留）
-            thumb_path = img_path.with_name(img_path.stem + "_thumb.jpg")
-            if thumb_path.exists() and thumb_path.is_file():
-                thumb_path.unlink()
-                logger.info(f"删除缩略图: {thumb_path}")
-        except Exception as e:
-            logger.warning(f"删除标注图片失败: {e}")
-
-    # 解除工单关联（方案B：仅置 NULL，保留工单记录）
-    db.query(WorkOrder).filter(
-        WorkOrder.detection_record_id == record_id
-    ).update({"detection_record_id": None})
-
-    # 删除记录
-    db.delete(record)
-    db.commit()
+    deleted_image = _delete_image_record(db, record)
     logger.info(f"检测记录 #{record_id} 已删除 by user {user.id}（标注图片已删: {deleted_image}）")
 
     return _json_resp({"success": True, "data": {
         "id": record_id,
         "annotated_image_deleted": deleted_image,
     }, "message": "记录已删除"})
+
+
+@app.post("/api/history/batch-delete")
+def api_batch_delete_history(request: Request, payload: dict = Body(...), db=Depends(get_db)):
+    """批量删除历史检测记录（图片/视频混合），支持部分失败。"""
+    user = require_login(request, db)
+    if user.role not in ("inspector", "admin"):
+        raise HTTPException(403, "仅运维人员可删除记录")
+
+    items = payload.get("items") or []
+    if not isinstance(items, list) or not items:
+        raise HTTPException(400, "请至少选择一条记录")
+
+    from database.models import VideoDetectionRecord as VDR
+    deleted = 0
+    deleted_images = 0
+    failed = []
+
+    for item in items:
+        record_id = item.get("id")
+        record_type = item.get("record_type") or "image"
+        try:
+            if record_type == "video":
+                record = db.query(VDR).filter(VDR.id == record_id).first()
+                if not record:
+                    failed.append({"id": record_id, "record_type": record_type, "reason": "记录不存在"})
+                    continue
+                deleted_images += _delete_video_record(db, record)
+            elif record_type == "image":
+                record = db.query(DetectionRecord).filter(DetectionRecord.id == record_id).first()
+                if not record:
+                    failed.append({"id": record_id, "record_type": record_type, "reason": "记录不存在"})
+                    continue
+                _delete_image_record(db, record)
+            else:
+                failed.append({"id": record_id, "record_type": record_type, "reason": "不支持的记录类型"})
+                continue
+            deleted += 1
+        except Exception as e:
+            db.rollback()
+            failed.append({"id": record_id, "record_type": record_type, "reason": str(e)})
+            logger.error(f"批量删除历史记录失败: id={record_id} type={record_type}, {e}")
+
+    logger.info(f"批量删除历史记录: 成功 {deleted} 条，失败 {len(failed)} 条 by user {user.id}")
+    return _json_resp({"success": True, "data": {
+        "deleted": deleted,
+        "deleted_images": deleted_images,
+        "failed": failed,
+    }, "message": f"已删除 {deleted} 条记录"})
 
 
 @app.post("/api/history/{record_id}/gps")

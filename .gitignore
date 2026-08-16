@@ -32,7 +32,8 @@ feedback/
 work/
 .claude/
 
-# ===== Dashi PPT 构建产物（本地生成，不发布 GitHub）=====
+# ===== PPT 与 Dashi 构建产物（本地生成，不发布 GitHub）=====
+*.pptx
 output/
 
 # ===== IDE =====

@@ -7,6 +7,8 @@ let currentUser = null, orderPage = 1, detailModal = null;
 let currentDetailId = null;        // 当前查看的工单 ID
 let currentRejectOrderId = null;   // 当前要驳回的工单 ID
 let currentDeleteOrderId = null;   // 当前要删除的工单 ID
+let selectedOrderIds = new Set();       // 勾选的工单 ID
+let currentOrderPageRecords = [];       // 当前页工单记录，用于全选/取消全选
 
 // Phase 7.2: 工单自动刷新（10秒，静默更新）
 let orderRefreshTimer = null;
@@ -153,12 +155,22 @@ async function loadOrders(page = 1, auto = false) {
     if (auto && sig === lastOrderSignature) return;
     lastOrderSignature = sig;
 
+    currentOrderPageRecords = records;
+    const canManage = currentUser && (currentUser.role === 'inspector' || currentUser.role === 'admin');
+    const colSpan = canManage ? 9 : 8;
     if (!records.length) {
-        tbody.innerHTML = '<tr><td colspan="8" class="text-center">暂无工单</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="${colSpan}" class="text-center">暂无工单</td></tr>`;
+        updateOrderSelectionUI();
     } else {
+        const selectAllTh = document.getElementById('orders-select-all-th');
+        if (selectAllTh) selectAllTh.classList.toggle('d-none', !canManage);
         tbody.innerHTML = records.map(r => {
             const s = STATUS_MAP[r.status] || { text: r.status, cls: 'badge bg-light' };
+            const rowSelectCell = canManage
+                ? `<td class="text-center"><input type="checkbox" class="form-check-input order-row-check" data-id="${r.id}" ${selectedOrderIds.has(r.id) ? 'checked' : ''} onchange="toggleOrderRow(this)"></td>`
+                : '';
             return `<tr>
+                ${rowSelectCell}
                 <td>${r.id}</td><td>${r.title}</td>
                 <td><span class="severity-tag severity-${r.severity}">${r.severity}</span></td>
                 <td><span class="${s.cls}">${s.text}</span></td>
@@ -171,6 +183,7 @@ async function loadOrders(page = 1, auto = false) {
                 </td>
             </tr>`;
         }).join('');
+        updateOrderSelectionUI(records);
     }
 
     const pgDiv = document.getElementById('orders-pagination');
@@ -494,6 +507,89 @@ async function confirmRejectWorker() {
     } catch (e) { errLog('orders', 'Worker驳回失败', e); }
 }
 
+// ===== 工单多选删除（Admin）=====
+
+function updateOrderSelectionUI(records) {
+    const btn = document.getElementById('btn-batch-delete-orders');
+    const countEl = document.getElementById('orders-selected-count');
+    const selectAllEl = document.getElementById('orders-select-all');
+    const count = selectedOrderIds.size;
+    if (countEl) countEl.textContent = String(count);
+    if (btn) {
+        const canDelete = currentUser && (currentUser.role === 'inspector' || currentUser.role === 'admin');
+        btn.classList.toggle('d-none', !(canDelete && count > 0));
+    }
+    const selectAllTh = document.getElementById('orders-select-all-th');
+    if (selectAllTh) {
+        const canDelete = currentUser && (currentUser.role === 'inspector' || currentUser.role === 'admin');
+        selectAllTh.classList.toggle('d-none', !canDelete);
+    }
+    if (selectAllEl && Array.isArray(records) && records.length) {
+        const selectedCount = records.filter(r => selectedOrderIds.has(r.id)).length;
+        selectAllEl.checked = selectedCount === records.length;
+        selectAllEl.indeterminate = selectedCount > 0 && selectedCount < records.length;
+    } else if (selectAllEl) {
+        selectAllEl.checked = false;
+        selectAllEl.indeterminate = false;
+    }
+}
+
+function toggleSelectAllOrders(el) {
+    if (!el) return;
+    currentOrderPageRecords.forEach(r => {
+        if (el.checked) selectedOrderIds.add(r.id);
+        else selectedOrderIds.delete(r.id);
+    });
+    document.querySelectorAll('.order-row-check').forEach(cb => { cb.checked = el.checked; });
+    updateOrderSelectionUI(currentOrderPageRecords);
+}
+
+function toggleOrderRow(cb) {
+    if (!cb?.dataset?.id) return;
+    const id = Number(cb.dataset.id);
+    if (cb.checked) selectedOrderIds.add(id);
+    else selectedOrderIds.delete(id);
+    updateOrderSelectionUI(currentOrderPageRecords);
+}
+
+function showBatchDeleteOrdersModal() {
+    if (!selectedOrderIds.size) return;
+    const countEl = document.getElementById('batch-del-orders-count');
+    const listEl = document.getElementById('batch-del-orders-list');
+    if (countEl) countEl.textContent = selectedOrderIds.size + ' 个';
+    if (listEl) listEl.textContent = '将删除工单 ID: ' + Array.from(selectedOrderIds).sort((a, b) => a - b).join('、');
+
+    const btn = document.getElementById('btn-confirm-batch-delete-orders');
+    if (btn) {
+        const newBtn = btn.cloneNode(true);
+        btn.parentNode.replaceChild(newBtn, btn);
+        newBtn.addEventListener('click', executeBatchDeleteOrders);
+    }
+    ModalManager.open('batchDeleteOrdersModal');
+}
+
+async function executeBatchDeleteOrders() {
+    const ids = Array.from(selectedOrderIds);
+    if (!ids.length) return;
+    try {
+        const d = await apiPostJson('/api/orders/batch-delete', { ids });
+        selectedOrderIds.clear();
+        ModalManager.close('batchDeleteOrdersModal');
+        await loadOrders(orderPage);
+        notifyDataChanged();
+        if (d.success) {
+            const failed = d.data?.failed || [];
+            if (failed.length) notify(`已删除 ${d.data.deleted} 个工单，失败 ${failed.length} 个`, 'warning');
+            else notify(`已删除 ${d.data.deleted} 个工单`, 'warning');
+        } else {
+            alert(d.detail || '批量删除失败');
+        }
+    } catch (e) {
+        errLog('orders', '批量删除工单失败', e);
+        alert('错误: ' + e.message);
+    }
+}
+
 // ===== Admin 删除工单 =====
 
 function showDeleteOrderModal(orderId, title) {
@@ -524,6 +620,7 @@ async function confirmDeleteOrder() {
             if (modalEl) bootstrap.Modal.getInstance(modalEl)?.hide();
             await loadOrders();
             notify(`工单 #${currentDeleteOrderId} 已删除`, 'warning');
+            notifyDataChanged();
             currentDeleteOrderId = null;
         } else {
             alert(data.detail || '删除失败');

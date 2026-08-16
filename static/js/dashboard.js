@@ -29,6 +29,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         log('dashboard', '图表渲染完成');
     } catch (e) { errLog('dashboard', '图表初始化失败', e); }
 
+    // 跨页面数据变更（批量删除等）后自动刷新，保持卡片与图表同步
+    try {
+        onDataChanged(() => loadData());
+        log('dashboard', '数据变更监听已注册');
+    } catch (e) { errLog('dashboard', '数据变更监听注册失败', e); }
+
     // 周期按钮
     try {
         const btns = document.getElementById('period-btns');

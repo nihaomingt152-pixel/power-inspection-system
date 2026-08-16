@@ -83,8 +83,12 @@ async function apiPostJson(url, data) {
         body: JSON.stringify(data),
     });
     if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`HTTP ${res.status}: ${text.substring(0, 200)}`);
+        let detail = `HTTP ${res.status}`;
+        try {
+            const err = await res.json();
+            if (err.detail) detail = err.detail;
+        } catch (e) {}
+        throw new Error(detail);
     }
     return res.json();
 }
@@ -229,6 +233,41 @@ function showRefreshSpinner(btn) {
         btn.classList.remove('btn-refreshing');
         btn.innerHTML = original;
     }, 2000);
+}
+
+// ===== 跨页面数据变更通知（批量删除后联动仪表盘刷新）=====
+let _dataChannel = null;
+const DATA_CHANGE_KEY = 'power_data_changed';
+
+// 优先使用 BroadcastChannel（同源多标签页实时通知），低版本浏览器回退 localStorage 事件
+function notifyDataChanged() {
+    try {
+        document.dispatchEvent(new CustomEvent('power:dataChanged'));
+        if (window.BroadcastChannel) {
+            if (!_dataChannel) _dataChannel = new BroadcastChannel('power-data-changed');
+            _dataChannel.postMessage(Date.now());
+        } else {
+            localStorage.setItem(DATA_CHANGE_KEY, String(Date.now()));
+        }
+    } catch (e) {
+        warn('common', '数据变更通知失败', e);
+    }
+}
+
+function onDataChanged(cb) {
+    if (typeof cb !== 'function') return;
+    const handler = () => {
+        try { cb(); } catch (e) { errLog('common', '数据变更回调失败', e); }
+    };
+    document.addEventListener('power:dataChanged', handler);
+    if (window.BroadcastChannel) {
+        if (!_dataChannel) _dataChannel = new BroadcastChannel('power-data-changed');
+        _dataChannel.addEventListener('message', handler);
+    } else {
+        window.addEventListener('storage', e => {
+            if (e.key === DATA_CHANGE_KEY) handler();
+        });
+    }
 }
 
 // ===== 通知 =====

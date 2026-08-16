@@ -16,6 +16,8 @@ let historyPage = 1;
 let historyRefreshTimer = null;
 let lastHistorySignature = null;   // 最近一次列表数据签名（用于判断是否有新增记录）
 const HISTORY_REFRESH_INTERVAL = 15000;
+let selectedHistoryIds = new Set();      // 勾选的历史记录（key: record_type:id）
+let currentHistoryPageRecords = [];      // 当前页记录，用于全选/取消全选
 let currentDispatchRecordId = null;  // 当前正在派发的检测记录 ID
 let currentDispatchImagePath = null; // 当前派发工单的缺陷图路径（视频帧派发时传递给后端）
 let currentDispatchAiSummary = null; // 当前派发工单的 AI 摘要（图片=ai_analysis，视频=video_summary）
@@ -1192,6 +1194,93 @@ function initDispatchMap() {
     setTimeout(() => dispatchMap.invalidateSize(), 200);
 }
 
+// ===== 历史记录多选删除（Admin）=====
+
+function updateHistorySelectionUI(records) {
+    const btn = document.getElementById('btn-batch-delete-history');
+    const countEl = document.getElementById('history-selected-count');
+    const selectAllEl = document.getElementById('history-select-all');
+    const count = selectedHistoryIds.size;
+    if (countEl) countEl.textContent = String(count);
+    if (btn) {
+        const canDelete = currentUser && (currentUser.role === 'inspector' || currentUser.role === 'admin');
+        btn.classList.toggle('d-none', !(canDelete && count > 0));
+    }
+    const selectAllTh = document.getElementById('history-select-all-th');
+    if (selectAllTh) {
+        const canDelete = currentUser && (currentUser.role === 'inspector' || currentUser.role === 'admin');
+        selectAllTh.classList.toggle('d-none', !canDelete);
+    }
+    if (selectAllEl && Array.isArray(records) && records.length) {
+        const pageKeys = records.map(r => (r.record_type || 'image') + ':' + r.id);
+        const selectedCount = pageKeys.filter(k => selectedHistoryIds.has(k)).length;
+        selectAllEl.checked = selectedCount === pageKeys.length;
+        selectAllEl.indeterminate = selectedCount > 0 && selectedCount < pageKeys.length;
+    } else if (selectAllEl) {
+        selectAllEl.checked = false;
+        selectAllEl.indeterminate = false;
+    }
+}
+
+function toggleSelectAllHistory(el) {
+    if (!el) return;
+    currentHistoryPageRecords.forEach(r => {
+        const key = (r.record_type || 'image') + ':' + r.id;
+        if (el.checked) selectedHistoryIds.add(key);
+        else selectedHistoryIds.delete(key);
+    });
+    document.querySelectorAll('.history-row-check').forEach(cb => { cb.checked = el.checked; });
+    updateHistorySelectionUI(currentHistoryPageRecords);
+}
+
+function toggleHistoryRow(cb) {
+    if (!cb?.dataset?.key) return;
+    if (cb.checked) selectedHistoryIds.add(cb.dataset.key);
+    else selectedHistoryIds.delete(cb.dataset.key);
+    updateHistorySelectionUI(currentHistoryPageRecords);
+}
+
+function showBatchDeleteHistoryModal() {
+    if (!selectedHistoryIds.size) return;
+    const countEl = document.getElementById('batch-del-history-count');
+    const listEl = document.getElementById('batch-del-history-list');
+    if (countEl) countEl.textContent = selectedHistoryIds.size + ' 条';
+    if (listEl) listEl.textContent = '将删除 ID: ' + Array.from(selectedHistoryIds).sort().join('、');
+
+    const btn = document.getElementById('btn-confirm-batch-delete-history');
+    if (btn) {
+        const newBtn = btn.cloneNode(true);
+        btn.parentNode.replaceChild(newBtn, btn);
+        newBtn.addEventListener('click', executeBatchDeleteHistory);
+    }
+    ModalManager.open('batchDeleteHistoryModal');
+}
+
+async function executeBatchDeleteHistory() {
+    const items = Array.from(selectedHistoryIds).map(k => {
+        const idx = k.indexOf(':');
+        return { record_type: k.slice(0, idx), id: Number(k.slice(idx + 1)) };
+    });
+    if (!items.length) return;
+    try {
+        const d = await apiPostJson('/api/history/batch-delete', { items });
+        selectedHistoryIds.clear();
+        ModalManager.close('batchDeleteHistoryModal');
+        await loadHistory(historyPage);
+        notifyDataChanged();
+        if (d.success) {
+            const failed = d.data?.failed || [];
+            if (failed.length) notify(`已删除 ${d.data.deleted} 条，失败 ${failed.length} 条`, 'warning');
+            else notify(`已删除 ${d.data.deleted} 条检测记录`, 'warning');
+        } else {
+            alert(d.detail || '批量删除失败');
+        }
+    } catch (e) {
+        errLog('main', '批量删除历史记录失败', e);
+        alert('错误: ' + e.message);
+    }
+}
+
 // ===== 删除视频记录（Admin）=====
 
 function deleteVideoRecord(recordId, filename, frameCount) {
@@ -1204,6 +1293,7 @@ function deleteVideoRecord(recordId, filename, frameCount) {
             if (d.success) {
                 notify(`视频记录已删除（清理了 ${d.data.deleted_images} 张帧图片）`, 'warning');
                 loadHistory();
+                notifyDataChanged();
             } else {
                 alert(d.detail || '删除失败');
             }
@@ -1240,6 +1330,7 @@ async function executeDeleteRecord() {
             notify('记录已删除', 'info');
             currentDeleteRecordId = null;
             loadHistory();
+            notifyDataChanged();
         } else {
             alert(d.detail || '删除失败');
         }
@@ -1569,10 +1660,23 @@ async function loadHistory(pg = 1, auto = false) {
         if (auto && sig === lastHistorySignature) return;
         lastHistorySignature = sig;
 
-        if (!records.length) { tb.innerHTML = '<tr><td colspan="10" class="text-center">暂无记录</td></tr>'; return; }
+        currentHistoryPageRecords = records;
+        const canManage = currentUser && (currentUser.role === 'inspector' || currentUser.role === 'admin');
+        const colSpan = canManage ? 11 : 10;
+        const selectAllTh = document.getElementById('history-select-all-th');
+        if (selectAllTh) selectAllTh.classList.toggle('d-none', !canManage);
+        if (!records.length) {
+            tb.innerHTML = `<tr><td colspan="${colSpan}" class="text-center">暂无记录</td></tr>`;
+            updateHistorySelectionUI();
+            return;
+        }
         tb.innerHTML = records.map(r => {
             const recType = r.record_type || 'image';
             const isVideo = recType === 'video';
+            const recKey = recType + ':' + r.id;
+            const rowSelectCell = canManage
+                ? `<td class="text-center"><input type="checkbox" class="form-check-input history-row-check" data-key="${recKey}" ${selectedHistoryIds.has(recKey) ? 'checked' : ''} onchange="toggleHistoryRow(this)"></td>`
+                : '';
 
             // 类型标识
             const typeLabel = isVideo ? '🎬 视频' : '📷 图片';
@@ -1617,6 +1721,7 @@ async function loadHistory(pg = 1, auto = false) {
             }
 
             return `<tr>
+                ${rowSelectCell}
                 <td>${r.id}</td><td>${typeLabel}</td>
                 <td>${fname}</td>
                 <td>${isVideo ? (r.total_frames || 0) : (r.total_detections || 0)}</td>
@@ -1628,6 +1733,7 @@ async function loadHistory(pg = 1, auto = false) {
                 <td>${actions}</td>
             </tr>`;
         }).join('');
+        updateHistorySelectionUI(records);
         const pgDiv = document.getElementById('history-pagination');
         if (pgDiv) {
             let h = '';
@@ -1642,16 +1748,63 @@ async function viewDetail(id) {
         const d = await apiGet(`/api/history/${id}`);
         if (d.success) {
             const rec = d.data, ai = rec.ai_analysis || {};
+            // 兼容旧记录：早期只保存了 abnormal_desc，没有完整 fallback_result
+            let fb = rec.fallback_result || null;
+            if (!fb && rec.has_abnormal && rec.abnormal_desc) {
+                fb = { description: rec.abnormal_desc, is_abnormal: true, confidence: 'low' };
+            }
             const img = buildPreviewUrl(rec.annotated_image_path);
             const body = document.getElementById('detail-modal-body');
             if (body) {
+                let aiHtml = '';
+                const hasAi = !!(rec.ai_analysis && Object.keys(rec.ai_analysis).length > 0);
+                if (hasAi) {
+                    aiHtml = `<div class="result-block ai-report mt-2">
+                        <h6>🧠 AI 分析报告</h6>
+                        <p><strong>描述:</strong> ${ai.description || '无'}</p>
+                        <p><strong>严重程度:</strong> <span class="severity-tag severity-${ai.severity || '一般'}">${ai.severity || '一般'}</span></p>
+                        <p><strong>成因:</strong> ${ai.cause || '无'}</p>
+                        <p><strong>建议:</strong> ${ai.suggestion || '无'}</p>
+                    </div>`;
+                }
+                const dets = rec.yolo_detections || [];
+                let yoloHtml = '';
+                if (dets.length) {
+                    yoloHtml = `<div class="result-block mt-2">
+                        <h6>🤖 YOLO 检测结果</h6>
+                        <ul class="mb-0">${dets.map(d => {
+                            const conf = typeof d.confidence === 'number' ? (d.confidence * 100).toFixed(1) + '%' : (d.confidence || '');
+                            const box = d.bbox ? ` [(${Math.round(d.bbox.x1)},${Math.round(d.bbox.y1)}) → (${Math.round(d.bbox.x2)},${Math.round(d.bbox.y2)})]` : '';
+                            return `<li>${d.class_name} ${conf}${box}</li>`;
+                        }).join('')}</ul>
+                    </div>`;
+                } else {
+                    yoloHtml = `<div class="result-block mt-2">
+                        <h6>🤖 YOLO 检测结果</h6>
+                        <p class="text-muted mb-0">未检测到目标</p>
+                    </div>`;
+                }
+                let fbHtml = '';
+                if (fb && (fb.description || fb.is_abnormal)) {
+                    const confMap = { high: '高', medium: '中', low: '低' };
+                    const confText = confMap[fb.confidence] || fb.confidence || '未知';
+                    fbHtml = `<div class="result-block fallback-report mt-2">
+                        <h6>🔍 兜底异物检测</h6>
+                        <p><strong>描述:</strong> ${fb.description || '无'}</p>
+                        <p><strong>是否异常:</strong> ${fb.is_abnormal ? '<span class="text-danger fw-bold">是</span>' : '否'}</p>
+                        <p><strong>置信度:</strong> ${confText}</p>
+                    </div>`;
+                }
                 body.innerHTML = `<div class="row"><div class="col-md-6">${img ? `<img src="${img}" class="img-fluid rounded">` : ''}</div>
                     <div class="col-md-6"><p>ID:${rec.id} | ${rec.source_type} | ${rec.source_name || ''}</p>
                     <p>GPS:${rec.gps_lat || rec.gps_latitude || '无'},${rec.gps_lng || rec.gps_longitude || ''}
                         ${rec.gps_source === 'exif' ? ' <small class="text-success">📍 EXIF</small>' : ''}
                         ${rec.gps_source === 'manual' ? ' <small class="text-primary">✏️ 手动</small>' : ''}</p>
                     <p>目标:${rec.total_detections} | 缺陷:${rec.defect_count} | 异常:${rec.has_abnormal ? '是' : '否'}</p>
-                    <p>${ai.description || '无AI分析'}</p></div></div>`;
+                    ${yoloHtml}
+                    ${aiHtml}
+                    ${fbHtml}
+                    </div></div>`;
             }
             ModalManager.open('detail-modal');
         }

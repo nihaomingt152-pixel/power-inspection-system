@@ -160,10 +160,14 @@
             </select>
             <label class="form-check"><input type="checkbox" id="alert-only" class="form-check-input" onchange="loadHistory()"> 仅预警</label>
             <button class="btn btn-sm btn-outline-secondary" onclick="manualRefreshHistory(this)">🔄 刷新</button>
+            <button class="btn btn-sm btn-outline-danger d-none" id="btn-batch-delete-history" onclick="showBatchDeleteHistoryModal()">🗑️ 删除选中 (<span id="history-selected-count">0</span>)</button>
         </div>
         <div class="table-responsive"><table class="table table-hover table-sm">
-            <thead><tr><th>ID</th><th>来源</th><th>文件名</th><th>目标</th><th>缺陷</th><th>预警</th><th>异常</th><th>耗时</th><th>时间</th><th>操作</th></tr></thead>
-            <tbody id="history-tbody"><tr><td colspan="10" class="text-center">加载中...</td></tr></tbody>
+            <thead><tr>
+                <th id="history-select-all-th" class="text-center d-none"><input type="checkbox" id="history-select-all" class="form-check-input" onchange="toggleSelectAllHistory(this)"></th>
+                <th>ID</th><th>来源</th><th>文件名</th><th>目标</th><th>缺陷</th><th>预警</th><th>异常</th><th>耗时</th><th>时间</th><th>操作</th>
+            </tr></thead>
+            <tbody id="history-tbody"><tr><td colspan="11" class="text-center">加载中...</td></tr></tbody>
         </table></div>
         <div id="history-pagination" class="d-flex justify-content-center gap-1"></div>
     </div>
@@ -324,6 +328,22 @@
         <div class="modal-footer">
             <button class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
             <button class="btn btn-primary d-none" id="btn-frame-create-order" onclick="createOrderFromFrame()">📤 生成工单</button>
+        </div>
+    </div></div>
+</div>
+
+<!-- 历史记录批量删除确认弹窗 -->
+<div class="modal fade" id="batchDeleteHistoryModal" tabindex="-1">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5>⚠️ 确认批量删除</h5><button class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+        <div class="modal-body">
+            <p>您确定要删除选中的 <strong id="batch-del-history-count">0</strong> 条检测记录吗？</p>
+            <p class="text-danger">此操作将永久删除记录及其关联的标注图片/帧图片，不可恢复！</p>
+            <div id="batch-del-history-list" class="small text-muted" style="max-height:180px;overflow:auto;"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+            <button class="btn btn-danger" id="btn-confirm-batch-delete-history">确认删除</button>
         </div>
     </div></div>
 </div>

@@ -35,18 +35,36 @@
             <option value="closed">已闭环</option>
         </select>
         <button class="btn btn-outline-primary" onclick="manualRefreshOrders(this)">🔄 刷新</button>
+        <button class="btn btn-outline-danger d-none" id="btn-batch-delete-orders" onclick="showBatchDeleteOrdersModal()">🗑️ 删除选中 (<span id="orders-selected-count">0</span>)</button>
     </div>
 
     <!-- 工单列表 -->
     <div class="table-responsive">
         <table class="table table-hover">
             <thead><tr>
+                <th id="orders-select-all-th" class="text-center d-none"><input type="checkbox" id="orders-select-all" class="form-check-input" onchange="toggleSelectAllOrders(this)"></th>
                 <th>ID</th><th>标题</th><th>严重程度</th><th>状态</th><th>创建者</th><th>检修人</th><th>时间</th><th>操作</th>
             </tr></thead>
-            <tbody id="orders-tbody"><tr><td colspan="8" class="text-center">加载中...</td></tr></tbody>
+            <tbody id="orders-tbody"><tr><td colspan="9" class="text-center">加载中...</td></tr></tbody>
         </table>
     </div>
     <div id="orders-pagination" class="d-flex justify-content-center gap-2"></div>
+</div>
+
+<!-- Admin 批量删除确认模态框 -->
+<div class="modal fade" id="batchDeleteOrdersModal">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5>⚠️ 确认批量删除工单</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+            <p>您确定要删除选中的 <strong id="batch-del-orders-count">0</strong> 个工单吗？</p>
+            <p class="text-danger">此操作将永久删除工单及其操作日志，不可恢复！</p>
+            <div id="batch-del-orders-list" class="small text-muted" style="max-height:180px;overflow:auto;"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+            <button class="btn btn-danger" id="btn-confirm-batch-delete-orders">确认删除</button>
+        </div>
+    </div></div>
 </div>
 
 <!-- 工单详情弹窗（加大尺寸以容纳左右对比） -->

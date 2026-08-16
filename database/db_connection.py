@@ -117,6 +117,7 @@ def init_db():
     # 增量迁移：为新版本添加新增列（Phase 6+）
     if DB_TYPE == "sqlite":
         _safe_add_column("detection_records", "gps_source", "VARCHAR(16)", "'none'")
+        _safe_add_column("detection_records", "fallback_result", "TEXT", "NULL")
         _safe_add_column("t_work_orders", "detection_record_id", "INTEGER", "NULL")
         _safe_add_column("t_work_orders", "review_remark", "TEXT", "NULL")
         _safe_add_column("t_work_orders", "close_remark", "TEXT", "NULL")
@@ -126,6 +127,7 @@ def init_db():
         _safe_add_column("t_video_detections", "video_summary", "TEXT", "NULL")
     else:
         _safe_add_column("detection_records", "gps_source", "VARCHAR(16)", "'none'")
+        _safe_add_column("detection_records", "fallback_result", "JSON", "NULL")
         _safe_add_column("t_work_orders", "detection_record_id", "INTEGER", "NULL")
         _safe_add_column("t_work_orders", "review_remark", "TEXT", "NULL")
         _safe_add_column("t_work_orders", "close_remark", "TEXT", "NULL")
