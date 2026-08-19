@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据仪表盘 - 电力巡检系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="/"><span class="brand-mark">⚡</span> 电力巡检系统</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav1">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="nav1">
+            <ul class="navbar-nav me-auto" id="nav-menu"></ul>
+            <span class="navbar-text me-3" id="nav-user"></span>
+            <button class="btn btn-outline-light btn-sm" onclick="logout()">退出</button>
+        </div>
+    </div>
+</nav>
+
+<div class="container-fluid py-4">
+    <div class="page-header">
+        <h3 class="page-title">📊 数据仪表盘</h3>
+        <!-- 时间筛选 -->
+        <div class="btn-group" id="period-btns">
+            <button class="btn btn-outline-primary active" data-days="7">近7天</button>
+            <button class="btn btn-outline-primary" data-days="30">近30天</button>
+            <button class="btn btn-outline-primary" data-days="90">近90天</button>
+        </div>
+    </div>
+
+    <!-- 统计卡片 -->
+    <div class="row mb-3" id="stat-cards">
+        <div class="col-md-3 mb-2"><div class="card text-center p-3"><h6>待派发</h6><h2 id="s-pending" class="text-secondary">0</h2></div></div>
+        <div class="col-md-3 mb-2"><div class="card text-center p-3"><h6>处理中</h6><h2 id="s-processing" class="text-warning">0</h2></div></div>
+        <div class="col-md-3 mb-2"><div class="card text-center p-3"><h6>待复检</h6><h2 id="s-pending_review" class="text-primary">0</h2></div></div>
+        <div class="col-md-3 mb-2"><div class="card text-center p-3"><h6>已闭环</h6><h2 id="s-closed" class="text-success">0</h2></div></div>
+    </div>
+
+    <!-- 图表 -->
+    <div class="row">
+        <div class="col-lg-8 mb-3">
+            <div class="card p-3"><h5>缺陷检出趋势</h5><div id="chart-trend" style="height:350px;"></div></div>
+        </div>
+        <div class="col-lg-4 mb-3">
+            <div class="card p-3"><h5>缺陷类别占比</h5><div id="chart-pie" style="height:350px;"></div></div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="/static/js/common.js"></script>
+<script src="/static/js/auth.js"></script>
+<script src="/static/js/dashboard.js"></script>
+</body>
+</html>

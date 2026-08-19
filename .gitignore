@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 环境与密钥
+.env
+.env.*
+
+# 日志
+*.log
+
+# 数据库（保留 schema 源码）
+database/*.db
+database/*.db-journal
+database/*.db-wal
+database/*.db-shm
+
+# 模型权重与训练产物
+runs/
+models/*.pt
+models/*.onnx
+
+# 上传与检测生成物
+static/uploads/
+static/outputs/
+
+# 报告与截图
+reports/
+
+# 编辑器本地配置
+.vscode/

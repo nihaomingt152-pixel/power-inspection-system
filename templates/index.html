@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>电力输电线路智能检测分析预警系统 v3.0</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<!-- 导航栏 -->
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark sticky-top">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="/"><span class="brand-mark">⚡</span> 电力巡检系统 <span class="brand-version">v3.0</span></a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#main-nav">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="main-nav">
+            <ul class="navbar-nav me-auto" id="nav-menu"></ul>
+            <!-- GPU 状态 -->
+            <span class="navbar-text me-2" id="gpu-status-bar">
+                <span class="badge bg-secondary" id="gpu-badge">GPU: --</span>
+            </span>
+            <!-- 语音开关 -->
+            <span class="navbar-text me-2">
+                <button class="btn btn-sm btn-outline-info" id="btn-voice" onclick="toggleVoice()" title="语音播报">🔊</button>
+            </span>
+            <span class="navbar-text me-3" id="nav-user">未登录</span>
+            <button class="btn btn-outline-light btn-sm" onclick="logout()">退出</button>
+        </div>
+    </div>
+</nav>
+
+<!-- 三标签页 -->
+<div class="container-fluid mt-2">
+    <ul class="nav nav-tabs" id="main-tabs">
+        <li class="nav-item"><button class="nav-link active" data-tab="tab-images">🖼️ 图片检测</button></li>
+        <li class="nav-item"><button class="nav-link" data-tab="tab-video">🎬 视频分析</button></li>
+        <li class="nav-item"><button class="nav-link" data-tab="tab-camera">📷 实时摄像头</button></li>
+    </ul>
+</div>
+
+<div class="container-fluid py-3">
+
+<!-- ========== TAB 1: 图片检测 ========== -->
+<div id="tab-images" class="tab-panel active">
+    <div class="card mb-3">
+        <div class="card-body">
+            <h5>📤 上传图片</h5>
+            <div class="row">
+                <div class="col-md-8">
+                    <div class="upload-area" id="upload-dropzone">
+                        <input type="file" id="file-images" accept="image/*" multiple hidden>
+                        <div class="upload-placeholder" onclick="document.getElementById('file-images').click()">
+                            <span class="upload-icon">📁</span>
+                            <p>点击选择图片 或 拖拽到此处（可多选）</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4 d-flex flex-column justify-content-center gap-2">
+                    <label class="form-check"><input type="checkbox" id="chk-ai-image" class="form-check-input" checked> 启用 AI 分析</label>
+                    <label class="form-check"><input type="checkbox" id="chk-fallback" class="form-check-input" checked> 启用兜底异物检测</label>
+                    <button class="btn btn-primary" onclick="uploadImages()">🚀 开始检测</button>
+                </div>
+            </div>
+            <div id="image-progress" class="progress mt-2 d-none"><div class="progress-bar progress-bar-striped progress-bar-animated" style="width:100%"></div></div>
+        </div>
+    </div>
+    <!-- 兜底检测告警 -->
+    <div id="fallback-alert" class="alert alert-warning d-none"></div>
+    <!-- 批量结果 -->
+    <div id="batch-grid" class="batch-grid"></div>
+    <!-- 单张详情 -->
+    <div class="card d-none" id="detail-card">
+        <div class="card-header d-flex justify-content-between">
+            <h5>📋 检测详情</h5>
+            <div>
+                <button class="btn btn-sm btn-warning d-none" id="btn-create-order" onclick="createWorkOrder()">📝 生成工单</button>
+                <button class="btn btn-sm btn-secondary ms-2" onclick="document.getElementById('detail-card').classList.add('d-none')">关闭</button>
+            </div>
+        </div>
+        <div class="card-body"><div class="row" id="detail-content"></div></div>
+    </div>
+</div>
+
+<!-- ========== TAB 2: 视频分析 ========== -->
+<div id="tab-video" class="tab-panel">
+    <div class="card mb-3">
+        <div class="card-body">
+            <h5>🎬 上传视频</h5>
+            <div class="row">
+                <div class="col-md-8">
+                    <div class="upload-area" id="video-upload-area">
+                        <input type="file" id="file-video" accept="video/*" hidden>
+                        <div class="upload-placeholder" onclick="document.getElementById('file-video').click()">
+                            <span class="upload-icon">🎬</span><p>点击上传视频（逐帧 YOLO + 缺陷帧 AI）</p>
+                        </div>
+                    </div>
+                    <!-- 已选择文件名提示（Phase 7.2 UI 优化） -->
+                    <div class="mt-2">
+                        <span id="video-file-name" class="text-muted small">未选择文件</span>
+                    </div>
+                </div>
+                <div class="col-md-4 d-flex flex-column gap-2">
+                    <label class="form-check"><input type="checkbox" id="chk-ai-video" class="form-check-input" checked> 启用 AI 分析</label>
+                    <button class="btn btn-primary" onclick="uploadVideo()">🚀 开始分析</button>
+                </div>
+            </div>
+            <div class="d-none mt-2" id="video-progress-container">
+                <div class="progress" style="height: 20px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" id="video-progress-fill" style="width:0%"></div>
+                </div>
+                <small id="video-progress-text" class="text-muted">准备分析...</small>
+                <small class="ms-2 text-muted" id="video-status-text"></small>
+            </div>
+        </div>
+    </div>
+    <div class="card mb-3 d-none" id="video-compare-card">
+        <div class="card-body">
+            <h5>📺 视频对比</h5>
+            <div class="row"><div class="col-md-6"><h6>原始视频</h6><video id="video-original" controls class="w-100" style="max-height:350px;"></video></div>
+            <div class="col-md-6"><h6>YOLO 标注</h6><video id="video-output" controls class="w-100" style="max-height:350px;"></video>
+            <button class="btn btn-sm btn-outline-primary mt-1 d-none" id="btn-download-video">⬇ 下载</button></div></div>
+        </div>
+    </div>
+    <div class="card d-none mt-3" id="video-summary-card">
+        <div class="card-body">
+            <h5>🤖 AI 分析总结（整段视频）</h5>
+            <div id="video-summary-content"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ========== TAB 3: 摄像头 ========== -->
+<div id="tab-camera" class="tab-panel">
+    <div class="card mb-3">
+        <div class="card-body">
+            <button class="btn btn-primary" id="btn-camera-toggle" onclick="toggleCamera()">▶ 开启摄像头</button>
+            <span id="camera-fps" class="ms-2 text-muted"></span>
+        </div>
+    </div>
+    <div class="row d-none" id="camera-layout">
+        <div class="col-md-6 mb-3"><div class="card"><div class="card-body"><h6>原始画面</h6><video id="camera-video" autoplay playsinline muted class="w-100" style="max-height:400px;background:#000;"></video></div></div></div>
+        <div class="col-md-6 mb-3"><div class="card"><div class="card-body"><h6>YOLO 实时检测</h6><canvas id="camera-canvas" class="w-100" style="max-height:400px;background:#000;"></canvas></div></div></div>
+    </div>
+    <div class="card d-none" id="camera-log-card">
+        <div class="card-body"><h6>📋 实时日志（最近 10 条）</h6><div id="camera-log" class="camera-log"></div></div>
+    </div>
+</div>
+
+<!-- ========== 历史记录 ========== -->
+<div class="card mt-3">
+    <div class="card-body">
+        <h5>📋 历史检测记录</h5>
+        <div class="toolbar-row">
+            <select id="history-filter" class="form-select w-auto" onchange="loadHistory()">
+                <option value="">全部</option><option value="image">图片</option><option value="video">视频</option>
+            </select>
+            <label class="form-check"><input type="checkbox" id="alert-only" class="form-check-input" onchange="loadHistory()"> 仅预警</label>
+            <button class="btn btn-sm btn-outline-secondary" onclick="manualRefreshHistory(this)">🔄 刷新</button>
+            <button class="btn btn-sm btn-outline-danger d-none" id="btn-batch-delete-history" onclick="showBatchDeleteHistoryModal()">🗑️ 删除选中 (<span id="history-selected-count">0</span>)</button>
+        </div>
+        <div class="table-responsive"><table class="table table-hover table-sm">
+            <thead><tr>
+                <th id="history-select-all-th" class="text-center d-none"><input type="checkbox" id="history-select-all" class="form-check-input" onchange="toggleSelectAllHistory(this)"></th>
+                <th>ID</th><th>来源</th><th>文件名</th><th>目标</th><th>缺陷</th><th>预警</th><th>异常</th><th>耗时</th><th>时间</th><th>操作</th>
+            </tr></thead>
+            <tbody id="history-tbody"><tr><td colspan="11" class="text-center">加载中...</td></tr></tbody>
+        </table></div>
+        <div id="history-pagination" class="d-flex justify-content-center gap-1"></div>
+    </div>
+</div>
+</div>
+
+<!-- 派发工单弹窗（从检测记录一键派发）-->
+<div class="modal fade" id="dispatch-modal">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+        <div class="modal-header"><h5>📤 派发工单</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+            <div class="dispatch-preview">
+                <div>
+                    <div class="modal-section-title"><span class="section-step">1</span> 检测图片</div>
+                    <div class="dispatch-image-shell">
+                        <img id="dispatch-img" class="dispatch-img" alt="检测图">
+                    </div>
+                </div>
+                <div>
+                    <div class="modal-section-title"><span class="section-step">2</span> AI 分析摘要</div>
+                    <div id="dispatch-ai-summary" class="dispatch-summary-body"></div>
+                </div>
+            </div>
+            <div class="modal-section dispatch-details-grid">
+                <div>
+                    <div class="modal-section-title"><span class="section-step">3</span> 工单信息</div>
+                    <div class="row g-3">
+                        <div class="col-12"><label class="form-label">标题</label><input id="dispatch-title" class="form-control"></div>
+                        <div class="col-12"><label class="form-label">描述</label><textarea id="dispatch-desc" class="form-control" rows="3"></textarea></div>
+                        <div class="col-md-6"><label class="form-label">严重等级</label><select id="dispatch-severity" class="form-select"><option>一般</option><option>严重</option><option>紧急</option></select></div>
+                        <div class="col-md-6"><label class="form-label">指派给</label><select id="dispatch-assignee" class="form-select"></select></div>
+                        <div class="col-md-6"><label class="form-label">GPS 纬度</label><input id="dispatch-gps-lat" class="form-control" placeholder="如 31.2304"></div>
+                        <div class="col-md-6"><label class="form-label">GPS 经度</label><input id="dispatch-gps-lng" class="form-control" placeholder="如 121.4737"></div>
+                    </div>
+                </div>
+                <div>
+                    <div class="modal-section-title"><span class="section-step">4</span> GPS 位置</div>
+                    <label class="form-label small text-muted mb-2">📍 点击地图选择 GPS 位置（标记可拖动）</label>
+                    <div id="dispatch-map" class="dispatch-map"></div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-primary" onclick="submitDispatch()">📤 确认派发</button></div>
+    </div></div>
+</div>
+
+<!-- 生成工单弹窗 -->
+<div class="modal fade" id="order-modal">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5>📝 生成缺陷工单</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+            <div class="mb-3"><label class="form-label">标题</label><input id="order-title" class="form-control"></div>
+            <div class="mb-3"><label class="form-label">描述</label><textarea id="order-desc" class="form-control" rows="3"></textarea></div>
+            <div class="mb-3"><label class="form-label">严重程度</label><select id="order-severity" class="form-select"><option>一般</option><option>严重</option><option>紧急</option></select></div>
+            <div class="mb-3"><label class="form-label">指派检修人</label><select id="order-assignee" class="form-select"></select></div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-primary" onclick="submitWorkOrder()">提交工单</button></div>
+    </div></div>
+</div>
+
+<!-- 详情弹窗 -->
+<div class="modal fade" id="detail-modal"><div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+    <div class="modal-header"><h5>记录详情</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body" id="detail-modal-body"></div>
+</div></div></div>
+
+<!-- GPS 地图点选弹窗 -->
+<div class="modal fade" id="gpsMapModal">
+    <div class="modal-dialog modal-lg" style="max-width:800px;"><div class="modal-content">
+        <div class="modal-header"><h5 id="gpsMapModalTitle">📍 编辑 GPS 位置</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body gps-modal-body">
+            <div class="gps-hint"><span>📍</span> 点击地图任意位置自动填充坐标，或拖动已有标记点</div>
+            <div id="gps-mini-map" class="gps-mini-map"></div>
+            <div class="gps-inputs">
+                <div><label class="form-label">纬度 (Latitude)</label><input id="gps-input-lat" class="form-control" placeholder="-90 ~ 90" type="number" step="any"></div>
+                <div><label class="form-label">经度 (Longitude)</label><input id="gps-input-lng" class="form-control" placeholder="-180 ~ 180" type="number" step="any"></div>
+            </div>
+            <small id="gps-source-hint" class="gps-source-hint"></small>
+        </div>
+        <div class="modal-footer"><button class="btn btn-primary" onclick="saveGpsFromModal()">💾 保存 GPS 坐标</button></div>
+    </div></div>
+</div>
+
+<!-- 视频检测详情弹窗（Phase 7）-->
+<div class="modal fade" id="videoDetailModal" tabindex="-1" data-bs-backdrop="true">
+    <div class="modal-dialog modal-xl" style="--bs-modal-width:90vw;"><div class="modal-content">
+        <div class="modal-header">
+            <h5 id="videoDetailTitle">🎬 视频检测结果</h5>
+            <button class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+            <div id="videoDetailSummary" class="video-detail-summary"></div>
+            <section class="result-block ai-report detail-section mb-3 d-none" id="videoDetailSummaryPanel">
+                <h6>🤖 AI 分析总结（整段视频）</h6>
+                <div id="videoDetailSummaryContent"></div>
+            </section>
+            <div class="video-detail-toolbar d-flex gap-2 mb-3">
+                <button class="btn btn-sm btn-outline-primary" id="btn-jump-video">⏱️ 跳转到视频</button>
+                <a id="btn-download-video2" class="btn btn-sm btn-outline-success" href="#" download>📥 下载标注视频</a>
+                <div class="form-check form-switch ms-auto">
+                    <input class="form-check-input" type="checkbox" id="showAllFrames" onchange="renderFrameGrid()">
+                    <label class="form-check-label" for="showAllFrames">显示全部帧</label>
+                </div>
+            </div>
+            <div id="frameGrid" class="frame-grid"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+        </div>
+    </div></div>
+</div>
+
+<!-- 单帧详情弹窗（Phase 7）-->
+<div class="modal fade" id="frameDetailModal" tabindex="-1" data-bs-backdrop="true">
+    <div class="modal-dialog modal-lg"><div class="modal-content">
+        <div class="modal-header">
+            <h5 id="frameDetailTitle">📸 帧详情</h5>
+            <button class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+            <div class="d-flex justify-content-between mb-2">
+                <button class="btn btn-sm btn-outline-secondary" id="btn-prev-frame">◀ 上一帧</button>
+                <span id="frameIndexInfo" class="text-muted"></span>
+                <button class="btn btn-sm btn-outline-secondary" id="btn-next-frame">下一帧 ▶</button>
+            </div>
+            <div class="text-center mb-3">
+                <canvas id="frameDetailCanvas" style="max-width:100%;max-height:350px;background:#1a1a2e;"></canvas>
+                <img id="frameDetailImg" class="img-fluid rounded" style="display:none;max-height:350px;" alt="">
+            </div>
+            <div id="frameDetectionList" class="mb-3"></div>
+            <div id="frameAiAnalysis" class="mb-3"></div>
+            <div id="frameGpsInfo" class="mb-2"></div>
+            <!-- Phase 29: 单帧预警等级手动修改 -->
+            <div class="row mt-3 align-items-center">
+                <div class="col-md-7">
+                    <span class="fw-bold">当前预警等级：</span>
+                    <span id="current-severity-badge" class="badge bg-secondary">正常</span>
+                    <span class="text-muted ms-1 small" id="severity-source-tag"></span>
+                </div>
+                <div class="col-md-5 text-end">
+                    <button class="btn btn-sm btn-outline-primary" id="toggle-severity-edit-btn" onclick="toggleSeverityEdit()">✏️ 修改等级</button>
+                </div>
+            </div>
+            <div id="severity-edit-area" class="row mt-2" style="display:none;">
+                <div class="col-md-8">
+                    <select class="form-select" id="severity-select">
+                        <option value="正常">正常</option>
+                        <option value="一般">一般</option>
+                        <option value="严重">严重</option>
+                        <option value="紧急">紧急</option>
+                    </select>
+                </div>
+                <div class="col-md-4 d-flex gap-2">
+                    <button class="btn btn-sm btn-success" id="confirm-severity-btn" onclick="confirmSeverityModification()">✅ 确认修改</button>
+                    <button class="btn btn-sm btn-secondary" id="cancel-severity-btn" onclick="cancelSeverityEdit()">取消</button>
+                </div>
+            </div>
+            <div id="severity-mod-info" class="text-muted small mt-1" style="display:none;"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+            <button class="btn btn-primary d-none" id="btn-frame-create-order" onclick="createOrderFromFrame()">📤 生成工单</button>
+        </div>
+    </div></div>
+</div>
+
+<!-- 历史记录批量删除确认弹窗 -->
+<div class="modal fade" id="batchDeleteHistoryModal" tabindex="-1">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5>⚠️ 确认批量删除</h5><button class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+        <div class="modal-body">
+            <p>您确定要删除选中的 <strong id="batch-del-history-count">0</strong> 条检测记录吗？</p>
+            <p class="text-danger">此操作将永久删除记录及其关联的标注图片/帧图片，不可恢复！</p>
+            <div id="batch-del-history-list" class="small text-muted" style="max-height:180px;overflow:auto;"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+            <button class="btn btn-danger" id="btn-confirm-batch-delete-history">确认删除</button>
+        </div>
+    </div></div>
+</div>
+
+<!-- 图片检测记录删除确认弹窗 -->
+<div class="modal fade" id="deleteRecordModal" tabindex="-1">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5>⚠️ 确认删除</h5><button class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+        <div class="modal-body" id="delete-record-body">
+            <div class="delete-confirm-body">
+                <div class="delete-warning-icon">🗑️</div>
+                <h6 class="delete-confirm-title">您确定要删除该图片检测记录吗？</h6>
+                <div class="delete-record-card">
+                    <div class="delete-record-row"><span>记录 ID</span><strong id="del-rec-id"></strong></div>
+                    <div class="delete-record-row"><span>文件名</span><strong id="del-rec-filename"></strong></div>
+                    <div class="delete-record-row"><span>检测时间</span><strong id="del-rec-time"></strong></div>
+                </div>
+                <div class="delete-danger-note"><span>⚠️</span><span>此操作将永久删除该记录及其关联的标注图片，不可恢复！</span></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+            <button class="btn btn-danger" id="btn-confirm-delete-record">确认删除</button>
+        </div>
+    </div></div>
+</div>
+
+<div id="alert-toast" class="alert-toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/js/common.js"></script>
+<script src="/static/js/auth.js"></script>
+<script src="/static/js/main.js"></script>
+</body>
+</html>

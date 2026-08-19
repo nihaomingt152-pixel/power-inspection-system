@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>工单管理 - 电力巡检系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="/"><span class="brand-mark">⚡</span> 电力巡检系统</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav3">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="nav3">
+            <ul class="navbar-nav me-auto" id="nav-menu"></ul>
+            <span class="navbar-text me-3" id="nav-user"></span>
+            <button class="btn btn-outline-light btn-sm" onclick="logout()">退出</button>
+        </div>
+    </div>
+</nav>
+
+<div class="container-fluid py-4">
+    <div class="page-header">
+        <h3 class="page-title">📋 工单管理</h3>
+    </div>
+    <!-- 筛选 -->
+    <div class="toolbar-row">
+        <select id="order-status-filter" class="form-select w-auto" onchange="loadOrders()">
+            <option value="">全部状态</option>
+            <option value="pending">待派发</option>
+            <option value="processing">处理中</option>
+            <option value="pending_review">待复检</option>
+            <option value="rejected">已驳回</option>
+            <option value="closed">已闭环</option>
+        </select>
+        <button class="btn btn-outline-primary" onclick="manualRefreshOrders(this)">🔄 刷新</button>
+        <button class="btn btn-outline-danger d-none" id="btn-batch-delete-orders" onclick="showBatchDeleteOrdersModal()">🗑️ 删除选中 (<span id="orders-selected-count">0</span>)</button>
+    </div>
+
+    <!-- 工单列表 -->
+    <div class="table-responsive">
+        <table class="table table-hover">
+            <thead><tr>
+                <th id="orders-select-all-th" class="text-center d-none"><input type="checkbox" id="orders-select-all" class="form-check-input" onchange="toggleSelectAllOrders(this)"></th>
+                <th>ID</th><th>标题</th><th>严重程度</th><th>状态</th><th>创建者</th><th>检修人</th><th>时间</th><th>操作</th>
+            </tr></thead>
+            <tbody id="orders-tbody"><tr><td colspan="9" class="text-center">加载中...</td></tr></tbody>
+        </table>
+    </div>
+    <div id="orders-pagination" class="d-flex justify-content-center gap-2"></div>
+</div>
+
+<!-- Admin 批量删除确认模态框 -->
+<div class="modal fade" id="batchDeleteOrdersModal">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5>⚠️ 确认批量删除工单</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+            <p>您确定要删除选中的 <strong id="batch-del-orders-count">0</strong> 个工单吗？</p>
+            <p class="text-danger">此操作将永久删除工单及其操作日志，不可恢复！</p>
+            <div id="batch-del-orders-list" class="small text-muted" style="max-height:180px;overflow:auto;"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+            <button class="btn btn-danger" id="btn-confirm-batch-delete-orders">确认删除</button>
+        </div>
+    </div></div>
+</div>
+
+<!-- 工单详情弹窗（加大尺寸以容纳左右对比） -->
+<div class="modal fade" id="order-detail-modal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header"><h5>工单详情</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-body" id="order-detail-body"></div>
+            <div class="modal-footer" id="order-detail-actions"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Worker 驳回模态框 -->
+<div class="modal fade" id="rejectWorkerModal">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5>⛔ 驳回工单 <span id="reject-order-id"></span></h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+            <div class="mb-3"><label class="form-label">驳回原因（必选）</label>
+                <select id="reject-reason-select" class="form-select" onchange="onRejectReasonChange()">
+                    <option value="">-- 请选择 --</option>
+                    <option value="现场情况不符">现场情况不符</option>
+                    <option value="备件不足">备件不足</option>
+                    <option value="需要停电作业">需要停电作业</option>
+                    <option value="天气原因无法作业">天气原因无法作业</option>
+                    <option value="其他">其他（选此项请填写补充说明）</option>
+                </select>
+            </div>
+            <div class="mb-3 d-none" id="reject-remark-group">
+                <label class="form-label">补充说明 <span class="text-danger">*</span></label>
+                <textarea id="reject-remark" class="form-control" rows="3" placeholder="请详细描述驳回原因..."></textarea>
+            </div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-danger" onclick="confirmRejectWorker()">确认驳回</button></div>
+    </div></div>
+</div>
+
+<!-- Admin 删除确认模态框 -->
+<div class="modal fade" id="deleteOrderModal">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5>⚠️ 确认删除工单</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body" id="delete-order-body">
+            <p>您确定要删除此工单吗？</p>
+            <p class="text-danger">此操作将永久删除该工单，不可恢复！</p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+            <button class="btn btn-danger" id="btn-confirm-delete">确认删除</button>
+        </div>
+    </div></div>
+</div>
+
+<!-- 图片放大模态框 -->
+<div class="modal fade" id="imageZoomModal">
+    <div class="modal-dialog modal-xl modal-dialog-centered"><div class="modal-content bg-dark">
+        <div class="modal-header border-0"><button class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body text-center p-2">
+            <img id="imageZoomImg" src="" style="max-width:100%;max-height:80vh;object-fit:contain;" alt="放大图片">
+        </div>
+    </div></div>
+</div>
+
+<!-- Worker 提交复检模态框 -->
+<div class="modal fade" id="submitReviewModal">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5>📤 提交复检 - <span id="submit-review-order-id"></span></h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+            <div class="mb-3">
+                <label class="form-label">处理说明/备注 <span class="text-danger">*</span></label>
+                <textarea id="submit-review-remark" class="form-control" rows="4" placeholder="请描述维修过程、更换部件、测试结果等。"></textarea>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">修复照片 <span class="text-danger">*</span></label>
+                <input type="file" id="submit-review-file" class="form-control" accept=".jpg,.jpeg,.png,.webp">
+                <small class="text-muted">支持格式: JPG / PNG / WebP，大小 ≤ 5MB</small>
+                <div id="submit-review-file-info" class="mt-1"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+            <button class="btn btn-primary" onclick="confirmSubmitReview()">确认提交</button>
+        </div>
+    </div></div>
+</div>
+
+<!-- Admin 重新派发模态框 -->
+<div class="modal fade" id="reassignModal">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5>📤 重新派发工单 - <span id="reassign-order-id"></span></h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+            <div class="mb-3"><label class="form-label">工单标题</label><input id="reassign-title" class="form-control"></div>
+            <div class="mb-3"><label class="form-label">描述</label><textarea id="reassign-desc" class="form-control" rows="3"></textarea></div>
+            <div class="mb-3"><label class="form-label">严重等级</label><select id="reassign-severity" class="form-select"><option>一般</option><option>严重</option><option>紧急</option></select></div>
+            <div class="mb-3"><label class="form-label">指派给</label><select id="reassign-assignee" class="form-select"></select></div>
+            <div class="alert alert-warning"><strong>驳回原因:</strong> <span id="reassign-reject-reason"></span></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+            <button class="btn btn-primary" onclick="confirmReassign()">确认派发</button>
+        </div>
+    </div></div>
+</div>
+
+<!-- Phase 7.2: 工单闭环报告导出悬浮按钮（仅查看的工单为已闭环时显示） -->
+<button id="btn-export-report" class="btn btn-success d-none export-report-fab" onclick="exportOrderReport()">
+    📄 导出报告
+</button>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="/static/js/common.js"></script>
+<script src="/static/js/auth.js"></script>
+<script src="/static/js/orders.js"></script>
+</body>
+</html>
