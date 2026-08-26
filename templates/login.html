@@ -8,14 +8,32 @@
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body class="login-page">
-<div class="container min-vh-100 d-flex align-items-center justify-content-center">
-    <div class="row w-100 justify-content-center">
-        <!-- 登录卡片 -->
-        <div class="col-md-5 col-lg-4">
+<!-- 分栏布局：左侧品牌展示区 + 右侧登录表单区（仅视觉容器，功能元素 id/事件未改动） -->
+<div class="auth-shell">
+    <!-- 品牌展示区 -->
+    <aside class="auth-hero">
+        <div class="auth-hero-inner">
+            <div class="auth-hero-brand"><span class="auth-hero-logo">⚡</span> 电力巡检系统</div>
+            <h2 class="auth-hero-title">输电线路<br>智能巡检 · AI 预警平台</h2>
+            <p class="auth-hero-desc">YOLO 缺陷检测 × 大模型语义分析，覆盖图片、视频、实时摄像头多源巡检场景，实现缺陷发现 → 工单派发 → 闭环处置的全流程管理。</p>
+            <ul class="auth-hero-features">
+                <li><span class="feature-dot">🎯</span><div><strong>精准检测</strong><small>8 类目标识别，缺陷置信度分级预警</small></div></li>
+                <li><span class="feature-dot">🤖</span><div><strong>AI 语义分析</strong><small>大模型研判成因，给出处置建议</small></div></li>
+                <li><span class="feature-dot">🗺️</span><div><strong>GIS 一张图</strong><small>缺陷定位与工单分布可视化总览</small></div></li>
+            </ul>
+        </div>
+        <div class="auth-hero-glow g1"></div>
+        <div class="auth-hero-glow g2"></div>
+    </aside>
+
+    <!-- 表单区 -->
+    <main class="auth-panel">
+        <div class="auth-panel-inner">
+            <!-- 登录卡片 -->
             <div class="card shadow-sm" id="login-card">
                 <div class="card-body p-4">
-                    <h3 class="text-center mb-3">⚡ 电力巡检系统</h3>
-                    <h5 class="text-center text-muted mb-4">用户登录</h5>
+                    <h3 class="text-center mb-1 auth-card-title"><span class="auth-card-logo">⚡</span> 电力巡检系统</h3>
+                    <h5 class="text-center text-muted mb-4 auth-card-sub">用户登录</h5>
                     <div id="login-error" class="alert alert-danger d-none"></div>
                     <div class="mb-3">
                         <label class="form-label">用户名</label>
@@ -36,7 +54,8 @@
             <!-- 注册卡片 -->
             <div class="card shadow-sm d-none" id="register-card">
                 <div class="card-body p-4">
-                    <h5 class="text-center mb-4">注册新账号</h5>
+                    <h3 class="text-center mb-1 auth-card-title"><span class="auth-card-logo">⚡</span> 电力巡检系统</h3>
+                    <h5 class="text-center text-muted mb-4 auth-card-sub">注册新账号</h5>
                     <div id="reg-error" class="alert alert-danger d-none"></div>
                     <div class="mb-3">
                         <label class="form-label">用户名</label>
@@ -69,7 +88,7 @@
                 </div>
             </div>
         </div>
-    </div>
+    </main>
 </div>
 <script src="/static/js/common.js"></script>
 <script src="/static/js/auth.js"></script>

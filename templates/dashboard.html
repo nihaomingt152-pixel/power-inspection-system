@@ -24,7 +24,10 @@
 
 <div class="container-fluid py-4">
     <div class="page-header">
-        <h3 class="page-title">📊 数据仪表盘</h3>
+        <div>
+            <h3 class="page-title">📊 数据仪表盘</h3>
+            <span class="page-subtitle">缺陷检出趋势与工单流转状态总览</span>
+        </div>
         <!-- 时间筛选 -->
         <div class="btn-group" id="period-btns">
             <button class="btn btn-outline-primary active" data-days="7">近7天</button>
@@ -33,12 +36,12 @@
         </div>
     </div>
 
-    <!-- 统计卡片 -->
+    <!-- 统计卡片（仅新增图标装饰与布局类，数字元素 id 未改动） -->
     <div class="row mb-3" id="stat-cards">
-        <div class="col-md-3 mb-2"><div class="card text-center p-3"><h6>待派发</h6><h2 id="s-pending" class="text-secondary">0</h2></div></div>
-        <div class="col-md-3 mb-2"><div class="card text-center p-3"><h6>处理中</h6><h2 id="s-processing" class="text-warning">0</h2></div></div>
-        <div class="col-md-3 mb-2"><div class="card text-center p-3"><h6>待复检</h6><h2 id="s-pending_review" class="text-primary">0</h2></div></div>
-        <div class="col-md-3 mb-2"><div class="card text-center p-3"><h6>已闭环</h6><h2 id="s-closed" class="text-success">0</h2></div></div>
+        <div class="col-md-3 mb-2"><div class="card stat-card"><span class="stat-icon">📤</span><div><h6>待派发</h6><h2 id="s-pending" class="text-secondary">0</h2></div></div></div>
+        <div class="col-md-3 mb-2"><div class="card stat-card stat-processing"><span class="stat-icon">🔧</span><div><h6>处理中</h6><h2 id="s-processing" class="text-warning">0</h2></div></div></div>
+        <div class="col-md-3 mb-2"><div class="card stat-card stat-review"><span class="stat-icon">🔍</span><div><h6>待复检</h6><h2 id="s-pending_review" class="text-primary">0</h2></div></div></div>
+        <div class="col-md-3 mb-2"><div class="card stat-card stat-closed"><span class="stat-icon">✅</span><div><h6>已闭环</h6><h2 id="s-closed" class="text-success">0</h2></div></div></div>
     </div>
 
     <!-- 图表 -->

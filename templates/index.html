@@ -34,7 +34,13 @@
 </nav>
 
 <!-- 三标签页 -->
-<div class="container-fluid mt-2">
+<div class="container-fluid mt-3">
+    <div class="page-header">
+        <div>
+            <h3 class="page-title">🛰️ 检测中心</h3>
+            <span class="page-subtitle">支持图片 / 视频 / 实时摄像头三种巡检来源，检测缺陷自动分级预警</span>
+        </div>
+    </div>
     <ul class="nav nav-tabs" id="main-tabs">
         <li class="nav-item"><button class="nav-link active" data-tab="tab-images">🖼️ 图片检测</button></li>
         <li class="nav-item"><button class="nav-link" data-tab="tab-video">🎬 视频分析</button></li>
@@ -60,8 +66,10 @@
                     </div>
                 </div>
                 <div class="col-md-4 d-flex flex-column justify-content-center gap-2">
-                    <label class="form-check"><input type="checkbox" id="chk-ai-image" class="form-check-input" checked> 启用 AI 分析</label>
-                    <label class="form-check"><input type="checkbox" id="chk-fallback" class="form-check-input" checked> 启用兜底异物检测</label>
+                    <div class="upload-options-panel">
+                        <label class="form-check"><input type="checkbox" id="chk-ai-image" class="form-check-input" checked> 启用 AI 分析</label>
+                        <label class="form-check"><input type="checkbox" id="chk-fallback" class="form-check-input" checked> 启用兜底异物检测</label>
+                    </div>
                     <button class="btn btn-primary" onclick="uploadImages()">🚀 开始检测</button>
                 </div>
             </div>
@@ -104,7 +112,9 @@
                     </div>
                 </div>
                 <div class="col-md-4 d-flex flex-column gap-2">
-                    <label class="form-check"><input type="checkbox" id="chk-ai-video" class="form-check-input" checked> 启用 AI 分析</label>
+                    <div class="upload-options-panel">
+                        <label class="form-check"><input type="checkbox" id="chk-ai-video" class="form-check-input" checked> 启用 AI 分析</label>
+                    </div>
                     <button class="btn btn-primary" onclick="uploadVideo()">🚀 开始分析</button>
                 </div>
             </div>

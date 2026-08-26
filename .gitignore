@@ -32,3 +32,33 @@ reports/
 
 # 编辑器本地配置
 .vscode/
+
+# UI ������ͼ��Ա�ͼ������󣬲���⣩
+work/ui_beautify/
+
+# 训练数据集与模型（不入库）
+BaiduData/
+my_dataset/
+Ultralytics/
+Insulator Defect Detection.v9-insulator-defect-detection.yolo26/
+
+# 训练脚本与模型权重
+train_yolo26.py
+convert_and_merge.py
+yolo*.pt
+yolo11n.pt
+yolo26n.pt
+
+# 大文件：演示文稿 / 报告（仅根目录，避免误伤 templates/*.html）
+/*.pptx
+/*.html
+/*.docx
+/*.xlsx
+
+# 生成目录
+output/
+feedback/
+reports/
+
+# 任务说明与截图工作目录
+work/

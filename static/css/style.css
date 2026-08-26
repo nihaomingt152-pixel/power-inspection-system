@@ -4,30 +4,34 @@
    ============================================================ */
 
 :root {
-    --bg: #f5f5f7;
+    --bg: #f4f6fa;
     --surface: #ffffff;
-    --surface-2: #fafafc;
-    --text: #1d1d1f;
-    --text-2: #6e6e73;
-    --text-3: #86868b;
-    --border: #e8e8ed;
-    --border-strong: #d2d2d7;
-    --accent: #0071e3;
-    --accent-dark: #0062c4;
-    --accent-tint: #eaf3fe;
-    --green: #34c759;
+    --surface-2: #f8fafd;
+    --text: #16202e;
+    --text-2: #5d6b81;
+    --text-3: #8a97ab;
+    --border: #e6ebf2;
+    --border-strong: #d3dbe6;
+    --accent: #0a6cff;
+    --accent-dark: #0857cc;
+    --accent-deep: #063f96;
+    --accent-tint: #eaf2ff;
+    --brand-gradient: linear-gradient(135deg, #0a84ff 0%, #0a6cff 55%, #0857cc 100%);
+    --green: #30b95d;
     --green-dark: #1d8a3a;
     --green-tint: #e4f9ea;
-    --orange: #ff9f0a;
+    --orange: #ff9500;
     --orange-dark: #b25000;
     --orange-tint: #fff1d6;
     --red: #ff3b30;
     --red-dark: #c22b23;
     --red-tint: #ffe5e3;
-    --radius: 8px;
+    --radius: 10px;
+    --radius-lg: 16px;
     --radius-pill: 999px;
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.05);
-    --shadow-md: 0 10px 32px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04);
+    --shadow-sm: 0 1px 2px rgba(22, 32, 46, 0.04), 0 2px 6px rgba(22, 32, 46, 0.05);
+    --shadow-md: 0 12px 34px rgba(22, 32, 46, 0.09), 0 2px 8px rgba(22, 32, 46, 0.04);
+    --shadow-lg: 0 24px 64px rgba(22, 32, 46, 0.14), 0 6px 18px rgba(22, 32, 46, 0.06);
     --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
 }
 
@@ -44,12 +48,38 @@ html {
 
 body {
     font-family: var(--font);
-    background: var(--bg);
+    background:
+        radial-gradient(1200px 500px at 85% -10%, rgba(10, 108, 255, 0.05), transparent 60%),
+        radial-gradient(900px 420px at -10% 30%, rgba(10, 132, 255, 0.04), transparent 55%),
+        var(--bg);
+    background-attachment: fixed;
     color: var(--text);
     line-height: 1.55;
     min-height: 100vh;
     letter-spacing: 0;
     font-size: 15px;
+}
+
+/* ---- 自定义滚动条（视觉层） ---- */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #c3ccda;
+    border-radius: var(--radius-pill);
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #9fabc0;
+    background-clip: content-box;
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -98,6 +128,24 @@ a:hover {
     line-height: 1.25;
 }
 
+.page-subtitle {
+    display: block;
+    font-size: 13px;
+    color: var(--text-3);
+    margin-top: 0.25rem;
+}
+
+/* 上传区右侧选项面板（视觉分组容器） */
+.upload-options-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 0.85rem 1rem;
+}
+
 /* ---- 顶部导航 ---- */
 .navbar {
     min-height: 58px;
@@ -132,13 +180,14 @@ a:hover {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 8px;
-    background: var(--accent-tint);
-    color: var(--accent);
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    background: var(--brand-gradient);
+    color: #fff;
     font-size: 15px;
     line-height: 1;
+    box-shadow: 0 3px 10px rgba(10, 108, 255, 0.35);
 }
 
 .brand-version {
@@ -167,9 +216,17 @@ a:hover {
 }
 
 .navbar-nav .nav-link.active {
-    background: #ececf1;
-    color: var(--text);
+    background: var(--accent-tint);
+    color: var(--accent);
     font-weight: 600;
+}
+
+/* GPU 状态徽章（玻璃胶囊） */
+#gpu-badge {
+    background: var(--green-tint) !important;
+    color: var(--green-dark) !important;
+    font-weight: 600;
+    border: 1px solid rgba(48, 185, 93, 0.25);
 }
 
 .navbar-text {
@@ -410,13 +467,13 @@ a:hover {
 .card {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
     box-shadow: var(--shadow-sm);
     margin-bottom: 1.25rem;
 }
 
 .card-body {
-    padding: 1.25rem;
+    padding: 1.35rem 1.4rem;
 }
 
 .card-header {
@@ -426,7 +483,21 @@ a:hover {
     gap: 0.75rem;
     background: transparent;
     border-bottom: 1px solid var(--border);
-    padding: 1rem 1.25rem;
+    padding: 1rem 1.4rem;
+}
+
+/* 卡片标题左侧品牌竖条，强化信息层级 */
+.card-header h5::before,
+.card-body > h5:first-child::before,
+.card > h5:first-child::before {
+    content: '';
+    display: inline-block;
+    width: 4px;
+    height: 15px;
+    border-radius: var(--radius-pill);
+    background: var(--brand-gradient);
+    margin-right: 0.6rem;
+    vertical-align: -2px;
 }
 
 .card-header h5,
@@ -651,11 +722,20 @@ a:hover {
     color: var(--text-2);
     font-size: 12px;
     font-weight: 600;
-    background: transparent;
+    background: var(--surface-2);
     border-bottom: 1px solid var(--border-strong);
     padding: 0.8rem 0.85rem;
     white-space: nowrap;
-    letter-spacing: 0;
+    letter-spacing: 0.02em;
+    text-transform: none;
+}
+
+.table thead th:first-child {
+    border-top-left-radius: var(--radius);
+}
+
+.table thead th:last-child {
+    border-top-right-radius: var(--radius);
 }
 
 .table td {
@@ -787,6 +867,11 @@ a:hover {
 #chart-trend,
 #chart-pie {
     border-radius: var(--radius);
+    /* 空数据时的淡网格底纹，让空白图表区域不显突兀 */
+    background:
+        linear-gradient(rgba(22, 32, 46, 0.028) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(22, 32, 46, 0.028) 1px, transparent 1px);
+    background-size: 28px 28px;
 }
 
 /* ---- 上传区 ---- */
@@ -798,31 +883,48 @@ a:hover {
 
 .upload-area {
     flex: 1;
-    min-height: 150px;
+    min-height: 170px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 1.5px dashed #c7c7cc;
-    border-radius: 14px;
-    padding: 1.25rem;
-    background: #fafafc;
+    border: 1.5px dashed #b9c6dd;
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    background:
+        radial-gradient(500px 160px at 50% 0%, rgba(10, 108, 255, 0.04), transparent 70%),
+        var(--surface-2);
     text-align: center;
     cursor: pointer;
-    transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+    transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
 .upload-area:hover,
 .upload-area.dragover {
     border-color: var(--accent);
     background: var(--accent-tint);
-    box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.08);
+    box-shadow: 0 0 0 4px rgba(10, 108, 255, 0.08), var(--shadow-sm);
+    transform: translateY(-1px);
 }
 
 .upload-icon {
-    display: block;
-    font-size: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 58px;
+    height: 58px;
+    border-radius: 18px;
+    background: #fff;
+    box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
+    font-size: 28px;
     line-height: 1;
-    margin-bottom: 0.6rem;
+    margin-bottom: 0.8rem;
+}
+
+.upload-area:hover .upload-icon,
+.upload-area.dragover .upload-icon {
+    transform: translateY(-3px) scale(1.04);
+    box-shadow: var(--shadow-md), 0 0 0 1px rgba(10, 108, 255, 0.25);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .upload-placeholder p {
@@ -1747,7 +1849,11 @@ a:hover {
     align-items: center;
     gap: 0.75rem;
     flex-wrap: wrap;
-    margin-bottom: 0.9rem;
+    margin-bottom: 1rem;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 0.75rem 1rem;
 }
 
 .toolbar-row .form-select {
@@ -1840,9 +1946,19 @@ a:hover {
 .modal-content {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.18);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
     overflow: hidden;
+}
+
+/* 弹窗出现动画（视觉增强，不改变 Bootstrap 显隐逻辑） */
+.modal.fade .modal-dialog {
+    transform: translateY(14px) scale(0.985);
+    transition: transform 0.24s cubic-bezier(0.2, 0.9, 0.3, 1.2), opacity 0.2s ease;
+}
+
+.modal.show .modal-dialog {
+    transform: translateY(0) scale(1);
 }
 
 .modal-header {
@@ -1852,6 +1968,19 @@ a:hover {
     gap: 0.75rem;
     padding: 1rem 1.5rem;
     border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+}
+
+.modal-header h5::before,
+.modal-header h6::before {
+    content: '';
+    display: inline-block;
+    width: 4px;
+    height: 15px;
+    border-radius: var(--radius-pill);
+    background: var(--brand-gradient);
+    margin-right: 0.6rem;
+    vertical-align: -2px;
 }
 
 .modal-header h5,
@@ -1862,6 +1991,15 @@ a:hover {
     font-size: 16px;
     font-weight: 650;
     margin: 0;
+}
+
+/* 图片放大弹窗保持深色，不加装饰条 */
+#imageZoomModal .modal-header {
+    background: transparent;
+}
+
+#imageZoomModal .modal-header h5::before {
+    display: none;
 }
 
 .modal-body {
@@ -2531,5 +2669,316 @@ body.map-page .leaflet-top.leaflet-left {
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
         scroll-behavior: auto !important;
+    }
+}
+
+/* ============================================================
+   v3.1 视觉升级层（纯样式，不涉及任何业务逻辑）
+   ============================================================ */
+
+/* ---- 主按钮品牌渐变 ---- */
+.btn-primary {
+    background: var(--brand-gradient);
+    border-color: transparent;
+    box-shadow: 0 4px 14px rgba(10, 108, 255, 0.28);
+}
+
+.btn-primary:hover,
+.btn-primary:focus {
+    background: linear-gradient(135deg, #1b90ff 0%, #1b76ff 55%, #0a63d8 100%);
+    border-color: transparent;
+    color: #fff;
+    box-shadow: 0 6px 20px rgba(10, 108, 255, 0.36);
+}
+
+/* ---- 页面主内容淡入 ---- */
+.container-fluid {
+    animation: pageIn 0.4s ease both;
+}
+
+@keyframes pageIn {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ---- 仪表盘统计卡（配合 dashboard.html 新结构） ---- */
+#stat-cards .card {
+    border-top: 0;
+    padding: 1.15rem 1.3rem;
+    text-align: left;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.95rem;
+    position: relative;
+    overflow: hidden;
+}
+
+#stat-cards .card::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background: var(--stat-color, var(--border));
+    opacity: 0.85;
+}
+
+#stat-cards .stat-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 46px;
+    height: 46px;
+    border-radius: 13px;
+    font-size: 22px;
+    flex-shrink: 0;
+    background: color-mix(in srgb, var(--stat-color, #8e8e93) 12%, #fff);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--stat-color, #8e8e93) 22%, transparent);
+}
+
+#stat-cards .stat-card { --stat-color: #8e8e93; }
+#stat-cards .stat-processing { --stat-color: var(--orange); }
+#stat-cards .stat-review    { --stat-color: var(--accent); }
+#stat-cards .stat-closed    { --stat-color: var(--green); }
+
+#stat-cards h6 {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-2);
+    margin-bottom: 0.2rem;
+}
+
+#stat-cards h2 {
+    font-size: 32px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--text) !important;
+    line-height: 1.1;
+    margin: 0;
+}
+
+/* ---- 表单控件聚焦光环升级 ---- */
+.form-control:focus,
+.form-select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px rgba(10, 108, 255, 0.13);
+}
+
+/* ---- 分页按钮圆角统一 ---- */
+.pagination button {
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+}
+
+.pagination button.active {
+    background: var(--brand-gradient);
+    border-color: transparent;
+    box-shadow: 0 3px 10px rgba(10, 108, 255, 0.3);
+}
+
+/* ---- 登录页分栏布局 ---- */
+body.login-page {
+    background: #0b1c3d;
+}
+
+.auth-shell {
+    display: grid;
+    grid-template-columns: minmax(420px, 1.15fr) minmax(400px, 0.85fr);
+    min-height: 100vh;
+}
+
+.auth-hero {
+    position: relative;
+    display: flex;
+    align-items: center;
+    padding: 4rem clamp(2rem, 6vw, 6rem);
+    background:
+        radial-gradient(900px 500px at 110% -10%, rgba(10, 132, 255, 0.35), transparent 60%),
+        radial-gradient(700px 420px at -20% 110%, rgba(48, 185, 93, 0.16), transparent 55%),
+        linear-gradient(150deg, #0b1c3d 0%, #0d2b5c 55%, #0a1f45 100%);
+    color: #eaf1fd;
+    overflow: hidden;
+}
+
+.auth-hero-inner {
+    position: relative;
+    z-index: 2;
+    max-width: 560px;
+    animation: pageIn 0.5s ease both;
+}
+
+.auth-hero-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 17px;
+    font-weight: 650;
+    color: #fff;
+    margin-bottom: 2.2rem;
+    letter-spacing: 0.02em;
+}
+
+.auth-hero-logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.14);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+    font-size: 17px;
+}
+
+.auth-hero-title {
+    font-size: clamp(28px, 3.2vw, 40px);
+    font-weight: 750;
+    line-height: 1.3;
+    color: #fff;
+    margin-bottom: 1.1rem;
+}
+
+.auth-hero-desc {
+    font-size: 14.5px;
+    line-height: 1.85;
+    color: rgba(234, 241, 253, 0.72);
+    margin-bottom: 2.4rem;
+}
+
+.auth-hero-features {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+}
+
+.auth-hero-features li {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.85rem;
+}
+
+.feature-dot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.1);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+    font-size: 18px;
+    flex-shrink: 0;
+}
+
+.auth-hero-features strong {
+    display: block;
+    font-size: 14.5px;
+    font-weight: 650;
+    color: #fff;
+    margin-bottom: 0.15rem;
+}
+
+.auth-hero-features small {
+    display: block;
+    font-size: 13px;
+    color: rgba(234, 241, 253, 0.6);
+    line-height: 1.6;
+}
+
+.auth-hero-glow {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(70px);
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.auth-hero-glow.g1 {
+    width: 420px;
+    height: 420px;
+    right: -120px;
+    top: -140px;
+    background: rgba(10, 132, 255, 0.4);
+}
+
+.auth-hero-glow.g2 {
+    width: 320px;
+    height: 320px;
+    left: -100px;
+    bottom: -120px;
+    background: rgba(48, 185, 93, 0.22);
+}
+
+.auth-panel {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem 2rem;
+    background:
+        radial-gradient(800px 400px at 80% -10%, rgba(10, 108, 255, 0.06), transparent 60%),
+        #f4f6fa;
+}
+
+.auth-panel-inner {
+    width: 100%;
+    max-width: 420px;
+    animation: pageIn 0.55s ease 0.08s both;
+}
+
+.auth-card-title {
+    font-size: 21px;
+    font-weight: 700;
+}
+
+.auth-card-logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    background: var(--brand-gradient);
+    color: #fff;
+    font-size: 16px;
+    margin-right: 0.45rem;
+    vertical-align: -6px;
+    box-shadow: 0 3px 10px rgba(10, 108, 255, 0.3);
+}
+
+.auth-card-sub {
+    font-weight: 500;
+}
+
+#login-card,
+#register-card {
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.9);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+}
+
+/* 登录页窄屏：隐藏品牌区，仅保留表单 */
+@media (max-width: 991.98px) {
+    .auth-shell {
+        grid-template-columns: 1fr;
+    }
+
+    .auth-hero {
+        display: none;
+    }
+
+    .auth-panel {
+        min-height: 100vh;
     }
 }
